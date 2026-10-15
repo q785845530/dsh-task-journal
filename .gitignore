@@ -1,0 +1,4 @@
+node_modules/
+.dsh-journal/
+*.log
+.DS_Store
