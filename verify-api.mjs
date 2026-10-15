@@ -143,8 +143,38 @@ const main = async () => {
   ok(Array.isArray(other.body.dirs) && other.body.dirs.length > 0, '返回扫描过的目录列表')
   ok(other.body.dirs.some((d) => d.includes('dsh-journal-api-')), '包含了活跃 writer 的目录')
 
+  // —— 服务刚重启：靠活跃 agent 反推目录 ——
+  console.log('\n用例 7：重启后靠活跃 agent 反推目录')
+  {
+    const live = { id: 'live-x', session: { id: 'live-x', header: { cwd: root }, append() {} } }
+    const regs2 = []
+    const ctx2 = {
+      logger: { info() {}, warn() {} },
+      on: () => () => {},
+      effect: (f) => f(),
+      inject: (services, cb) => {
+        if (services.includes('webServer')) {
+          cb({ effect: (f) => f(), webServer: { register(o) { regs2.push(o.handler); return () => {} } } })
+        }
+        if (services.includes('tools')) cb({ tools: { register() {} } })
+        if (services.includes('agents')) cb({ on: () => () => {} })
+      },
+      agents: { get: (id) => (id === 'live-x' ? live : undefined), list: () => [live] },
+    }
+    const mod2 = await import('./lib/index.js')
+    mod2.apply(ctx2, { enabled: true, dir: base, notifyOnFailure: false })
+    const srv2 = createServer((req, res) => regs2[0](req, res))
+    await new Promise((r) => srv2.listen(0, '127.0.0.1', r))
+    const p2 = srv2.address().port
+    const r2 = await fetch(`http://127.0.0.1:${p2}/api/dsh-journal/sessions`)
+    const b2 = await r2.json()
+    ok(r2.status === 200, 'HTTP 200')
+    ok(b2.sessions.some((s) => s.session === sid), '内存无 writer 也能靠 agent 列出该会话')
+    srv2.close()
+  }
+
   // —— 错误处理 ——
-  console.log('\n用例 7：错误处理')
+  console.log('\n用例 8：错误处理')
   const nf = await get(`/nope?cwd=${encodeURIComponent(root)}`)
   ok(nf.status === 404, '未知接口返回 404')
   const noSess = await get(`/summary?session=does-not-exist&cwd=${encodeURIComponent(root)}`)
