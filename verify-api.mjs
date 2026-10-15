@@ -173,8 +173,37 @@ const main = async () => {
     srv2.close()
   }
 
+
+  // —— 会话文件路径 ——
+  console.log('\n用例 8：会话文件路径')
+  const sf = await get(`/summary?session=${sid}&cwd=${encodeURIComponent(root)}`)
+  ok(typeof sf.body.sessionFile === 'string' && sf.body.sessionFile !== '', '返回 sessionFile')
+  ok(sf.body.sessionFile.includes('.dsh/sessions/'), '路径含 .dsh/sessions/')
+  ok(sf.body.sessionFile.endsWith('session.v4.jsonl.zstd'), '文件名正确')
+  ok(sf.body.sessionFile.includes(sid), '路径含会话 id')
+  ok(typeof sf.body.sessionFileExists === 'boolean', '返回 sessionFileExists')
+
+  // —— 标记失败 ——
+  console.log('\n用例 9：标记失败 /abandon')
+  const ab = await post('/abandon', { session: sid, cwd: root, note: '测试放弃' })
+  ok(ab.status === 200 && ab.body.ok === true, '标记失败成功')
+  ok(typeof ab.body.task === 'string', `返回任务号 ${ab.body.task}`)
+  const failAfter = await get(`/failures?session=${sid}&cwd=${encodeURIComponent(root)}`)
+  ok(failAfter.body.text.includes('已标记为失败'), '失败清单记录了放弃')
+  ok(failAfter.body.text.includes('测试放弃'), '记录了放弃原因')
+  ok(failAfter.body.text.includes('不再重试'), '标注不再重试')
+  const tasksAfter = await get(`/tasks?session=${sid}&cwd=${encodeURIComponent(root)}`)
+  ok(tasksAfter.body.text.includes('已放弃'), '任务清单标注已放弃')
+
+  // —— 开新会话（无 agents.create 时应如实失败）——
+  console.log('\n用例 10：开新会话 /retry-new')
+  const rn = await post('/retry-new', { session: sid, cwd: root })
+  ok(rn.status === 200, 'HTTP 200')
+  ok(rn.body.ok === false, '缺少 agent 注册表时如实返回失败')
+  ok(typeof rn.body.message === 'string' && rn.body.message.includes('新会话'), '给出可读原因')
+
   // —— 错误处理 ——
-  console.log('\n用例 8：错误处理')
+  console.log('\n用例 11：错误处理')
   const nf = await get(`/nope?cwd=${encodeURIComponent(root)}`)
   ok(nf.status === 404, '未知接口返回 404')
   const noSess = await get(`/summary?session=does-not-exist&cwd=${encodeURIComponent(root)}`)
