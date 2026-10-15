@@ -10,13 +10,14 @@
   },
   "exports": {
     ".": "./lib/index.js",
+    "./client": "./lib/client.js",
     "./package.json": "./package.json"
   },
   "files": [
-    "lib",
+    "README.md",
     "bin",
     "cordis.patch.yml",
-    "README.md"
+    "lib"
   ],
   "engines": {
     "node": ">=22.5",
@@ -25,6 +26,10 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": []
     }
   },
   "dependencies": {
