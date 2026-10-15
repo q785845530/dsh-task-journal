@@ -136,8 +136,15 @@ const main = async () => {
   ok(rt.body.ok === false, '无活跃 agent 时明确返回失败')
   ok(typeof rt.body.message === 'string' && rt.body.message.includes('继续'), '给出替代做法')
 
+  // —— 跨目录：日志不在请求 cwd 下也要能列出来 ——
+  console.log('\n用例 6：跨目录汇总（服务 cwd ≠ 会话 cwd）')
+  const other = await get(`/sessions?cwd=/tmp/definitely-not-here`)
+  ok(other.status === 200, 'HTTP 200')
+  ok(Array.isArray(other.body.dirs) && other.body.dirs.length > 0, '返回扫描过的目录列表')
+  ok(other.body.dirs.some((d) => d.includes('dsh-journal-api-')), '包含了活跃 writer 的目录')
+
   // —— 错误处理 ——
-  console.log('\n用例 6：错误处理')
+  console.log('\n用例 7：错误处理')
   const nf = await get(`/nope?cwd=${encodeURIComponent(root)}`)
   ok(nf.status === 404, '未知接口返回 404')
   const noSess = await get(`/summary?session=does-not-exist&cwd=${encodeURIComponent(root)}`)
