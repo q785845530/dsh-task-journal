@@ -5,12 +5,16 @@
   "license": "MIT",
   "type": "module",
   "main": "lib/index.js",
+  "bin": {
+    "dsh-journal": "bin/dsh-journal.mjs"
+  },
   "exports": {
     ".": "./lib/index.js",
     "./package.json": "./package.json"
   },
   "files": [
     "lib",
+    "bin",
     "cordis.patch.yml",
     "README.md"
   ],
