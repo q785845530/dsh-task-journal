@@ -95,6 +95,40 @@ dsh-journal retry --cwd /home/wsn/文档/dsh --note "先补 0485"
 
 > 命令行不能唤醒会话。要真正继续未完成的任务，请在该会话里发一句「继续」，或让模型调用 `journal_retry`。
 
+## 界面（Web GUI）
+
+插件带一个**独立界面**：打开 DSH 的设置页，左侧导航多一项 **「任务日志」**，右侧是完整面板。
+
+面板内容：
+
+- **顶部工具条**：会话选择器、刷新、导出汇总、导出全部、一键重试
+- **统计卡片**：任务总数 / 已完成 / 未完成 / 失败记录 / 模型参数变更
+- **当前模型**：显示最近一次的 provider 与模型参数
+- **四个标签页**：
+  - 任务清单（带 `T` 编号与 `[x]`/`[ ]` 状态）
+  - 未完成的问题（含原始错误码）
+  - 模型与参数（每次变更一行）
+  - 完整日志
+- **实时刷新**：该会话有活跃 agent 时每 5 秒自动刷新
+- **操作反馈**：导出与重试完成后右下角弹提示（带 ✅）
+
+界面数据走同源 `/api/dsh-journal/*`（由插件 host 半提供），不依赖任何构建步骤——`lib/client.js` 是手写的 ModuleLoader bundle，只用 shell 已提供的 `react`，颜色全部取自主题变量，切换明暗主题不会坏。
+
+### 界面用到的接口
+
+| 方法 | 路径 | 作用 |
+| --- | --- | --- |
+| GET | `/api/dsh-journal/sessions` | 列出会话日志 |
+| GET | `/api/dsh-journal/summary` | 统计 + 当前模型 + 文件路径 |
+| GET | `/api/dsh-journal/tasks` | 任务清单 |
+| GET | `/api/dsh-journal/failures` | 未完成任务 |
+| GET | `/api/dsh-journal/models` | 模型记录 |
+| GET | `/api/dsh-journal/journal` | 完整日志（尾部截断） |
+| POST | `/api/dsh-journal/export` | 导出结果 |
+| POST | `/api/dsh-journal/retry` | 一键重试 |
+
+查询参数：`?session=<会话id>&cwd=<工作目录>`（都可省略，省略时取最近的会话）。
+
 ## 模型工具
 
 插件给模型注册三个工具：
@@ -142,6 +176,7 @@ dsh-journal retry --cwd /home/wsn/文档/dsh --note "先补 0485"
 cd ~/.dsh/plugins/dsh-task-journal
 node verify.mjs       # 插件逻辑：50 项
 node verify-cli.mjs   # 命令行：28 项
+node verify-api.mjs   # 界面 API：26 项
 ```
 
 覆盖：自动落盘、注入上下文排除、追加语义、自定义目录、三个工具、子代理排除、禁用开关、超长截断、工具名映射、模型参数记录、用量、未完成任务与错误码、导出、重试、CLI 全部子命令与错误处理。
