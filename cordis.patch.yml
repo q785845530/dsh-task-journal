@@ -1,0 +1,25 @@
+# dsh-task-journal — bundle patch layer.
+#
+# 装进 profile（`dsh plugin --profile web add link:<dir>`）后，本补丁作为该
+# bundle 的层被应用。它加载包主入口作为 host 半：一个普通 Cordis 插件。
+# 插件没有 client 半——它只做两件事：
+#   1) 监听 session/event，把「用户下发的任务」与「助手产出/工具结果」
+#      增量追加到本地文件；
+#   2) 注册一个 `journal` 工具，让模型能主动把阶段结论写进同一份日志。
+- insert:
+    - id: dsh-task-journal
+      name: dsh-task-journal
+      config:
+        enabled: true
+        # 留空 = 写到 <会话 cwd>/.dsh-journal/；也可写绝对路径或相对 cwd 的路径。
+        dir: ""
+        # 是否写 Markdown 汇总日志（人读）。
+        markdown: true
+        # 是否写 JSONL 事件流（机读，一行一个事件）。
+        jsonl: true
+        # 是否把助手回复也记进日志（长会话会很大，默认只记摘要）。
+        recordAssistant: true
+        # 单条记录文本上限（字符），超出截断并标注。
+        maxChars: 4000
+        # 是否在会话日志里回一条 notice（不唤醒模型）。
+        notify: false
