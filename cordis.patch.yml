@@ -6,7 +6,11 @@
 #   1) 监听 session/event，把「任务」「产出」「工具结果」「模型参数」增量写到本地文件；
 #   2) 轮次失败时记录「未完成的问题与原因」（failures-*.md）；
 #   3) 注册 journal / journal_export / journal_retry 三个工具；
-#   4) 配套命令行 `dsh-journal`（bin/）做导出、查看与重试指引。
+#   4) 配套命令行 `dsh-journal`（bin/）做导出、查看与重试指引；
+#   5) 提供 /api/dsh-journal/* 接口，供浏览器半的「任务日志」界面读取与操作。
+#
+# 浏览器半由 package.json 的 dsh.client 声明（exports["./client"] → lib/client.js），
+# 在设置页左侧导航加一项「任务日志」，右侧是完整面板。
 - insert:
     - id: dsh-task-journal
       name: dsh-task-journal
