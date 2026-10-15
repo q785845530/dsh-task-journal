@@ -78,6 +78,19 @@ const toolResultWithCallId = (callId, text, isError = false) => ({
   data: { turn: 1, step: 1, message: { role: 'tool', content: [{ type: 'text', text }], source: { kind: 'tool', callId }, toolCallId: callId, isError } },
 })
 
+
+const headerEvent = (config) => ({
+  type: 'request/header', seq: 7, time: Date.now(), data: { header: { config }, reason: 'change' },
+})
+const assistantWithUsage = (text, usage) => ({
+  type: 'assistant/message', seq: 8, time: Date.now(),
+  data: { turn: 1, step: 1, message: { role: 'assistant', content: [{ type: 'text', text }], source: { kind: 'model' } }, usage },
+})
+const turnEndErr = (message, code) => ({
+  type: 'turn/end', seq: 9, time: Date.now(),
+  data: { turn: 1, reason: { kind: 'error', error: { message, code } } },
+})
+
 const turnEnd = (kind = 'completed') => ({
   type: 'turn/end', seq: 4, time: Date.now(), data: { turn: 1, reason: { kind } },
 })
@@ -115,7 +128,9 @@ const main = async () => {
 
   const taskName = files.find((f) => f.startsWith('tasks-') && f.endsWith('.md'))
   const tasks = taskName ? await readFile(join(outDir, taskName), 'utf8') : ''
-  ok(tasks.includes('- [ ]'), '任务清单有未完成条目')
+  // 该任务随后收到 turn/end(completed)，应被标记为已完成 [x]。
+  ok(tasks.includes('- [x]'), '任务在 completed 后标记为已完成')
+  ok(tasks.includes('[`T1`]'), '任务带 T 编号')
   ok(tasks.includes('写一个把任务写到本地文件的插件'), '任务清单有任务标题')
 
   const jsonlName = files.find((f) => f.startsWith('events-') && f.endsWith('.jsonl'))
@@ -231,6 +246,74 @@ const main = async () => {
   ok(kTxt.includes('继续'), 'dsh-continue 计入任务')
   ok(kTxt.includes('真正的人话'), '真人输入计入任务')
   ok(!kTxt.includes('项目记忆'), 'runtime-context 注入被排除')
+
+  // —— 用例 11：模型与参数记录 ——
+  console.log('\n用例 11：模型与参数记录')
+  const ctx11 = fakeCtx()
+  apply(ctx11, { enabled: true, dir: join(dir, 'model') })
+  const s11 = fakeSession(dir, 'model-1')
+  ctx11._emit(s11, headerEvent({ provider: 'workbuddy', model: 'deepseek-v4.1-flash', reasoningEffort: 'high', maxTokens: 128000 }))
+  ctx11._emit(s11, headerEvent({ provider: 'workbuddy', model: 'deepseek-v4.1-flash', reasoningEffort: 'high', maxTokens: 128000 })) // 重复不该再记
+  ctx11._emit(s11, assistantWithUsage('干完了', { inputTokens: 100, outputTokens: 20, reasoningTokens: 5 }))
+  await new Promise((r) => setTimeout(r, 400))
+  const mDir = join(dir, 'model')
+  const mFiles = existsSync(mDir) ? await readdir(mDir) : []
+  const mName = mFiles.find((f) => f.startsWith('models-'))
+  const mTxt = mName ? await readFile(join(mDir, mName), 'utf8') : ''
+  ok(mTxt.includes('provider=workbuddy'), '模型记录含 provider')
+  ok(mTxt.includes('model=deepseek-v4.1-flash'), '模型记录含 model')
+  ok(mTxt.includes('reasoning=high'), '模型记录含 reasoningEffort')
+  ok(mTxt.includes('maxTokens=128000'), '模型记录含 maxTokens')
+  // 只数真正的模型记录行（带时间戳｜参数），文件头的元数据行不算。
+  const modelRows = mTxt.split('\n').filter((l) => /^- \d{4}-\d{2}-\d{2} /.test(l)).length
+  ok(modelRows === 1, `重复的相同参数只记一次（${modelRows} 条）`)
+  const mJsonl = mFiles.find((f) => f.endsWith('.jsonl'))
+  const mJ = mJsonl ? await readFile(join(mDir, mJsonl), 'utf8') : ''
+  ok(mJ.includes('"type":"model"'), 'JSONL 含 model 事件')
+  ok(mJ.includes('"inputTokens":100'), 'JSONL 含 usage 数据')
+
+  // —— 用例 12：未完成任务与失败原因 ——
+  console.log('\n用例 12：未完成任务记录')
+  const ctx12 = fakeCtx()
+  apply(ctx12, { enabled: true, dir: join(dir, 'fail'), notifyOnFailure: false })
+  const s12 = fakeSession(dir, 'fail-1')
+  ctx12._emit(s12, userMsg('写一个插件'))
+  ctx12._emit(s12, turnEndErr('模型限流中，请稍后再试', 'QUOTA_EXCEEDED'))
+  await new Promise((r) => setTimeout(r, 400))
+  const fDir = join(dir, 'fail')
+  const fFiles = existsSync(fDir) ? await readdir(fDir) : []
+  const fName = fFiles.find((f) => f.startsWith('failures-'))
+  const fTxt = fName ? await readFile(join(fDir, fName), 'utf8') : ''
+  ok(fTxt.includes('QUOTA_EXCEEDED'), '失败清单记录了错误码')
+  ok(fTxt.includes('模型限流中'), '失败清单记录了错误原因')
+  ok(fTxt.includes('未完成'), '失败清单标记为未完成')
+  const fTask = fFiles.find((f) => f.startsWith('tasks-'))
+  const fTaskTxt = fTask ? await readFile(join(fDir, fTask), 'utf8') : ''
+  ok(fTaskTxt.includes('- [ ]'), '失败的任务在清单里保持未完成')
+
+  // —— 用例 13：journal_export 导出 ——
+  console.log('\n用例 13：journal_export 导出')
+  const exportTool = ctx12._tools.find((t) => t.name === 'journal_export')
+  ok(exportTool !== undefined, 'journal_export 工具已注册')
+  if (exportTool) {
+    const exp = await exportTool.execute({ format: 'all' }, { agent: { session: s12 }, signal: undefined })
+    ok(Array.isArray(exp.files) && exp.files.length > 0, `导出返回文件清单（${exp.files?.length} 个）`)
+    ok(exp.files.every((f) => existsSync(f)), '导出的文件都真实存在')
+    ok(typeof exp.dir === 'string' && exp.dir !== '', '导出返回目录')
+    const first = exp.files[0] ? await readFile(exp.files[0], 'utf8') : ''
+    ok(first.includes('任务日志') || first.includes('写一个插件'), '汇总文件含日志内容')
+  }
+
+  // —— 用例 14：journal_retry 一键重试 ——
+  console.log('\n用例 14：journal_retry 一键重试')
+  const retryTool = ctx12._tools.find((t) => t.name === 'journal_retry')
+  ok(retryTool !== undefined, 'journal_retry 工具已注册')
+  if (retryTool) {
+    // 无活跃 agent 时应给出明确失败说明
+    const r1 = await retryTool.execute({}, { agent: { session: s12 }, signal: undefined })
+    ok(r1.ok === false, '无活跃 agent 时明确返回失败')
+    ok(typeof r1.message === 'string' && r1.message.includes('继续'), '失败信息给出可行的替代做法')
+  }
 
   await rm(dir, { recursive: true, force: true })
   console.log(`\n结果：${pass} passed / ${fail} failed`)
