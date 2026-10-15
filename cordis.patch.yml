@@ -2,10 +2,11 @@
 #
 # 装进 profile（`dsh plugin --profile web add link:<dir>`）后，本补丁作为该
 # bundle 的层被应用。它加载包主入口作为 host 半：一个普通 Cordis 插件。
-# 插件没有 client 半——它只做两件事：
-#   1) 监听 session/event，把「用户下发的任务」与「助手产出/工具结果」
-#      增量追加到本地文件；
-#   2) 注册一个 `journal` 工具，让模型能主动把阶段结论写进同一份日志。
+# 插件没有 client 半——它做四件事：
+#   1) 监听 session/event，把「任务」「产出」「工具结果」「模型参数」增量写到本地文件；
+#   2) 轮次失败时记录「未完成的问题与原因」（failures-*.md）；
+#   3) 注册 journal / journal_export / journal_retry 三个工具；
+#   4) 配套命令行 `dsh-journal`（bin/）做导出、查看与重试指引。
 - insert:
     - id: dsh-task-journal
       name: dsh-task-journal
@@ -17,9 +18,15 @@
         markdown: true
         # 是否写 JSONL 事件流（机读，一行一个事件）。
         jsonl: true
-        # 是否把助手回复也记进日志（长会话会很大，默认只记摘要）。
+        # 是否把助手回复正文记进日志。
         recordAssistant: true
+        # 是否记录模型与参数（provider / model / reasoningEffort / maxTokens）。
+        recordModel: true
         # 单条记录文本上限（字符），超出截断并标注。
         maxChars: 4000
-        # 是否在会话日志里回一条 notice（不唤醒模型）。
+        # 每条任务写入时在会话里回一条 notice（不唤醒模型）。
         notify: false
+        # 轮次失败时在会话里提示「可用 journal_retry 重试」。
+        notifyOnFailure: true
+        # journal_retry 注入的提示词。
+        retryPrompt: "上一个任务没有做完。请接着上次的进度继续把它做完，不要重新开始；完成后简要说明结果。"
