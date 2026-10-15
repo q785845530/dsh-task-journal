@@ -49,7 +49,18 @@ python3 -c "import json;d=json.load(open('package.json'));print('dsh-task-journa
 
 ## 命令行 `dsh-journal`
 
-不进入会话也能导出和查看结果。安装后 `dsh-journal` 即在 PATH（或直接 `node bin/dsh-journal.mjs`）。
+不进入会话也能导出和查看结果。
+
+**命令已在 PATH**：已链接到 `~/.local/bin/dsh-journal`（登录 shell）与 `~/.local/share/pnpm/bin/dsh-journal`（非登录 shell），直接敲 `dsh-journal` 即可。
+
+若换机器或链接失效，重建一次：
+
+```bash
+ln -sf ~/.dsh/plugins/dsh-task-journal/bin/dsh-journal.mjs ~/.local/bin/dsh-journal
+chmod +x ~/.dsh/plugins/dsh-task-journal/bin/dsh-journal.mjs
+```
+
+也可以直接 `node ~/.dsh/plugins/dsh-task-journal/bin/dsh-journal.mjs <命令>`。
 
 ```bash
 # 列出本地有哪些会话日志
