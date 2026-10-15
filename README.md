@@ -101,7 +101,8 @@ dsh-journal retry --cwd /home/wsn/文档/dsh --note "先补 0485"
 
 面板内容：
 
-- **顶部工具条**：会话选择器、刷新、导出汇总、导出全部、一键重试
+- **顶部工具条**：会话选择器、刷新、导出汇总、导出全部、一键重试、**新会话续跑**、**标记失败**
+- **文件路径区**：列出日志目录、**会话原始文件**（`.dsh/sessions/.../session.v4.jsonl.zstd`）与五份日志的完整路径，方便直接打开
 - **统计卡片**：任务总数 / 已完成 / 未完成 / 失败记录 / 模型参数变更
 - **当前模型**：显示最近一次的 provider 与模型参数
 - **四个标签页**：
@@ -135,7 +136,9 @@ dsh-journal retry --cwd /home/wsn/文档/dsh --note "先补 0485"
 | GET | `/api/dsh-journal/models` | 模型记录 |
 | GET | `/api/dsh-journal/journal` | 完整日志（尾部截断） |
 | POST | `/api/dsh-journal/export` | 导出结果 |
-| POST | `/api/dsh-journal/retry` | 一键重试 |
+| POST | `/api/dsh-journal/retry` | 一键重试（原会话内 followup） |
+| POST | `/api/dsh-journal/retry-new` | 开新会话续跑 |
+| POST | `/api/dsh-journal/abandon` | 标记任务失败 |
 
 查询参数：`?session=<会话id>&cwd=<工作目录>`（都可省略，省略时取最近的会话）。
 
@@ -148,8 +151,29 @@ dsh-journal retry --cwd /home/wsn/文档/dsh --note "先补 0485"
 | `journal(kind, text)` | 主动记 `task`/`result`/`note`/`todo` |
 | `journal_export(dir?, format?)` | 把本次会话日志导出到本地目录 |
 | `journal_retry(note?)` | **一键重试**最近未完成的任务：注入「接着上次继续做完」并唤醒会话 |
+| `journal_retry_new(note?)` | **开新会话续跑**：创建一个全新会话，把任务原文发进去，原会话不受影响 |
+| `journal_abandon(note?)` | **标记失败**：把最近未完成的任务直接结案，不再重试 |
 
 `journal_retry` 会把最近一条未完成任务的原文附在提示里，所以下一轮是从断点接着做，而不是重头开始。
+
+## 未完成任务的三种处理
+
+任务失败（限流、中断、输出超限等）时会记进 `failures-*.md`。之后有三种走法：
+
+| 做法 | 适用场景 | 怎么用 |
+| --- | --- | --- |
+| **原会话重试** | 原会话还活着、上下文没满 | `journal_retry` 工具，或界面「一键重试」 |
+| **开新会话续跑** | 原会话已结束 / 上下文已满 | `journal_retry_new` 工具，或界面「新会话续跑」 |
+| **标记失败** | 确认放弃这个任务 | `journal_abandon` 工具，或界面「标记失败」 |
+
+**开新会话续跑**会：新建一个根会话（`journal-retry-<uuid>`）→ 继承原会话的 `cwd` → 沿用当前模型 →
+挂载同一 preset → 自动命名（`续跑：<任务摘要>`）→ 挂进工作区 → 继承权限档位 →
+把任务原文作为首条消息发进去。原会话完全不受影响。
+
+**标记失败**会：在 `failures-*.md` 追加一条带原因的记录 → 把 `tasks-*.md` 里那条标上 `❌ 已放弃`
+→ 从待重试队列移除。之后「一键重试」不会再挑到它。
+
+> 服务重启后内存里的待办队列会丢，但两种重试都能从磁盘的 `tasks-*.md` 兜底找回最后一条未完成任务。
 
 ## 配置
 
@@ -186,7 +210,7 @@ dsh-journal retry --cwd /home/wsn/文档/dsh --note "先补 0485"
 cd ~/.dsh/plugins/dsh-task-journal
 node verify.mjs       # 插件逻辑：50 项
 node verify-cli.mjs   # 命令行：28 项
-node verify-api.mjs   # 界面 API：26 项
+node verify-api.mjs   # 界面 API：45 项
 ```
 
 覆盖：自动落盘、注入上下文排除、追加语义、自定义目录、三个工具、子代理排除、禁用开关、超长截断、工具名映射、模型参数记录、用量、未完成任务与错误码、导出、重试、CLI 全部子命令与错误处理。
