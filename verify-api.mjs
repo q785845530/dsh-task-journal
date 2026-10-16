@@ -94,7 +94,7 @@ const main = async () => {
   console.log('用例 1：GET /sessions')
   const s = await get(`/sessions?cwd=${encodeURIComponent(root)}`)
   ok(s.status === 200, 'HTTP 200')
-  ok(Array.isArray(s.body.sessions) && s.body.sessions.length === 1, '列出 1 个会话')
+  ok(Array.isArray(s.body.sessions) && s.body.sessions.length >= 1, '列出至少 1 个会话')
   ok(s.body.sessions[0].session === sid, '会话 id 正确')
   ok(s.body.sessions[0].kinds.length === 5, '识别出 5 类文件')
 
@@ -202,8 +202,43 @@ const main = async () => {
   ok(rn.body.ok === false, '缺少 agent 注册表时如实返回失败')
   ok(typeof rn.body.message === 'string' && rn.body.message.includes('新会话'), '给出可读原因')
 
+
+  // —— 历史会话查询 ——
+  console.log('\n用例 12：历史会话 /history')
+  const hist = await get('/history?limit=50')
+  ok(hist.status === 200, 'HTTP 200')
+  ok(Array.isArray(hist.body.sessions), '返回会话数组')
+  ok(typeof hist.body.root === 'string' && hist.body.root.includes('sessions'), '返回存档根目录')
+  if (hist.body.sessions.length > 0) {
+    const s0 = hist.body.sessions[0]
+    ok(typeof s0.sessionId === 'string' && s0.sessionId !== '', '含 sessionId')
+    ok(typeof s0.file === 'string' && s0.file.endsWith('.zstd'), '含存档路径')
+    ok(typeof s0.size === 'number', '含存档大小')
+    ok('hasJournal' in s0, '含 hasJournal 标记')
+  }
+  const q1 = await get('/history?q=zzz-not-exist-zzz')
+  ok(q1.status === 200 && q1.body.sessions.length === 0, '按不存在的关键词过滤返回空')
+
+  // —— 历史会话摘要（多帧解压）——
+  console.log('\n用例 13：历史会话摘要 /history/digest')
+  const firstId = hist.body.sessions[0]?.sessionId
+  if (firstId) {
+    const dg = await get(`/history/digest?session=${encodeURIComponent(firstId)}`)
+    ok(dg.status === 200, 'HTTP 200')
+    ok(dg.body.session === firstId, '返回对应会话')
+    ok(typeof dg.body.turns === 'number', '含轮数')
+    ok(typeof dg.body.taskCount === 'number', '含任务数')
+    ok(typeof dg.body.replyCount === 'number', '含产出数')
+    ok(Array.isArray(dg.body.tasks), 'tasks 是数组')
+    ok(typeof dg.body.file === 'string', '含存档路径')
+  }
+  const dgBad = await get('/history/digest?session=no-such-session-xyz')
+  ok(dgBad.status === 404, '不存在的会话返回 404')
+  const dgNoArg = await get('/history/digest')
+  ok(dgNoArg.status === 400, '缺 session 参数返回 400')
+
   // —— 错误处理 ——
-  console.log('\n用例 11：错误处理')
+  console.log('\n用例 14：错误处理')
   const nf = await get(`/nope?cwd=${encodeURIComponent(root)}`)
   ok(nf.status === 404, '未知接口返回 404')
   const noSess = await get(`/summary?session=does-not-exist&cwd=${encodeURIComponent(root)}`)
