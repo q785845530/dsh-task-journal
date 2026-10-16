@@ -105,8 +105,44 @@ const main = async () => {
   ok(r.out.includes('继续'), '给出「继续」指引')
   ok(r.out.includes('✅'), '有完成提示')
 
+  // —— agents（目录浏览 + 归档）——
+  console.log('\n用例 8：agents 目录')
+  const ag = run(['agents', '--cwd', root])
+  ok(ag.code === 0, '退出码 0')
+  ok(ag.out.includes('子智能体目录'), '打印目录标题')
+  ok(ag.out.includes('【'), '按分类分组输出')
+  const agCat = run(['agents', '--cwd', root, '--category', 'backend'])
+  ok(agCat.code === 0, '带分类参数退出码 0')
+  ok(agCat.out.includes('后端'), '只输出该分类')
+
+  console.log('\n用例 9：agents --archive')
+  const arch = run(['agents', '--cwd', root, '--archive'])
+  ok(arch.code === 0, '归档退出码 0')
+  ok(arch.out.includes('归档完成'), '有完成提示')
+  const subBase = join(base, 'subagents')
+  ok(existsSync(join(subBase, 'catalog.json')), '写出 catalog.json')
+  ok(existsSync(join(subBase, 'catalog.md')), '写出 catalog.md')
+  const ent = existsSync(join(subBase, 'entries')) ? await readdir(join(subBase, 'entries')) : []
+  ok(ent.some((x) => x.endsWith('.md')), '写出条目 Markdown')
+  const pre = existsSync(join(subBase, 'presets')) ? await readdir(join(subBase, 'presets')) : []
+  ok(pre.length > 0, '写出预设目录')
+
+  console.log('\n用例 10：agents --archive --sources')
+  const src = run(['agents', '--cwd', root, '--archive', '--sources'])
+  ok(src.code === 0, '源码归档退出码 0')
+  ok(src.out.includes('源码归档'), '报告源码归档结果')
+  ok(existsSync(join(subBase, 'src', 'SOURCE.md')), '写出 SOURCE.md')
+
+  console.log('\n用例 11：HOME 遮蔽')
+  const masked = run(['list', '--cwd', root])
+  const home = process.env.HOME
+  ok(home === undefined || !masked.out.includes(home), 'list 输出不含本机 HOME')
+  const raw = run(['list', '--cwd', root, '--no-redact'])
+  ok(raw.code === 0, '--no-redact 可用')
+  ok(raw.out.includes(root), '--no-redact 时输出完整路径')
+
   // —— 错误处理 ——
-  console.log('\n用例 8：错误处理')
+  console.log('\n用例 12：错误处理')
   const bad = run(['export', '--cwd', join(root, 'nope')])
   ok(bad.code === 1, '无日志目录时退出码 1')
   ok(bad.err.includes('❌'), '错误输出带 ❌')

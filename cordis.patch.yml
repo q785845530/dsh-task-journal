@@ -2,15 +2,16 @@
 #
 # 装进 profile（`dsh plugin --profile web add link:<dir>`）后，本补丁作为该
 # bundle 的层被应用。它加载包主入口作为 host 半：一个普通 Cordis 插件。
-# 插件没有 client 半——它做四件事：
+# host 半做六件事：
 #   1) 监听 session/event，把「任务」「产出」「工具结果」「模型参数」增量写到本地文件；
 #   2) 轮次失败时记录「未完成的问题与原因」（failures-*.md）；
-#   3) 注册 journal / journal_export / journal_retry 三个工具；
-#   4) 配套命令行 `dsh-journal`（bin/）做导出、查看与重试指引；
-#   5) 提供 /api/dsh-journal/* 接口，供浏览器半的「任务日志」界面读取与操作。
+#   3) 注册 journal / journal_export / journal_retry 等工具；
+#   4) 记录子智能体的使用情况（subagents-*.md），并维护子智能体目录与归档；
+#   5) 配套命令行 `dsh-journal`（bin/）做导出、查看、目录浏览与归档；
+#   6) 提供 /api/dsh-journal/* 接口，供浏览器半的「任务日志」界面读取与操作。
 #
 # 浏览器半由 package.json 的 dsh.client 声明（exports["./client"] → lib/client.js），
-# 在设置页左侧导航加一项「任务日志」，右侧是完整面板。
+# 在设置页左侧导航加一项「任务日志」，右侧是完整面板（含「子智能体」页签）。
 - insert:
     - id: dsh-task-journal
       name: dsh-task-journal
@@ -26,6 +27,12 @@
         recordAssistant: true
         # 是否记录模型与参数（provider / model / reasoningEffort / maxTokens）。
         recordModel: true
+        # 是否记录子智能体的使用情况（委派与生命周期）。
+        recordSubagents: true
+        # 界面与日志里是否把本机 HOME 前缀遮蔽成 `~`（默认开；设 false 显示完整路径）。
+        redactHome: true
+        # 子智能体归档目录；留空 = <日志目录>/subagents。
+        subagentDir: ""
         # 单条记录文本上限（字符），超出截断并标注。
         maxChars: 4000
         # 每条任务写入时在会话里回一条 notice（不唤醒模型）。
