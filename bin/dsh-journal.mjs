@@ -36,17 +36,23 @@ const USAGE = `dsh-journal — 任务日志命令行
   dsh-journal agents   [--category <分类>]                列出子智能体目录
   dsh-journal agents   --archive [--sources]              归档目录（可选含源码）
   dsh-journal retry    [--note <补充>]                    打印重试指引（不唤醒会话）
+  dsh-journal repair   [--session <id>] [--apply]         体检并修复会话归档（默认试运行）
 
 通用参数：
   --cwd <目录>      工作目录（默认当前目录）
   --session <id>    指定会话（默认取最近更新的那个）
   --category <分类> 只看某一分类（${categoryIds().join(' | ')}）
   --no-redact       输出完整路径（默认把本机 HOME 前缀遮蔽成 ~）
+  --apply           repair 时真正落盘（默认只试运行，不写文件）
   -h, --help        显示帮助
 
 说明：日志由 DSH 插件 dsh-task-journal 在会话过程中自动写入。
 命令行负责导出与查看；要真正唤醒会话继续未完成的任务，请在会话里发「继续」，
-或让模型调用 journal_retry 工具（命令行无法注入会话）。`
+或让模型调用 journal_retry 工具（命令行无法注入会话）。
+
+repair 修复的是 DSH 的会话归档（<会话根>/<项目>/<id>/session.v4.jsonl.zstd），
+不是本插件的任务日志。历史加载报 "lacks an identified message" 时用它。
+只补消息缺失的 role/id，不改内容；落盘前自动备份，默认试运行。`
 
 /** HOME 遮蔽：默认开启。 */
 const hideHome = (p, args) => (args !== undefined && args['no-redact'] === true
@@ -322,6 +328,66 @@ const main = async () => {
       return 0
     }
 
+    case 'repair': {
+      // 会话修复：无需进入会话，直接对会话归档体检/修复。
+      // 这是「修得快」的兜底路径——界面起不来时，命令行还能修。
+      const root = process.env.DSH_SESSIONS_DIR
+        ?? join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'sessions')
+      const apply = args.apply === true
+      const only = typeof args.session === 'string' && args.session !== '' ? args.session : null
+
+      console.log(bold(`会话归档根：${hideHome(root, args)}`))
+      if (!existsSync(root)) {
+        fail(`找不到会话目录：${hideHome(root, args)}`)
+        return 1
+      }
+
+      const { scanRoot, repairFile } = await import('../lib/session-repair.js')
+      const { results } = await scanRoot(root)
+      const broken = results.filter((r) => !r.ok)
+
+      console.log(`扫描 ${results.length} 个会话，破损 ${broken.length} 个。`)
+      if (only !== null) {
+        const hit = broken.find((r) => r.session === only)
+        if (hit === undefined) {
+          const healthy = results.find((r) => r.session === only)
+          console.log(healthy === undefined
+            ? yellow(`没有找到会话 ${only}`)
+            : `${green('该会话完好，无需修复')}：${only}`)
+          return healthy === undefined ? 1 : 0
+        }
+        const one = await repairFile(hit.file, { apply, sessionId: hit.session })
+        printRepairOne(one, args)
+        return one.applied || (!apply && one.plan.ok) ? 0 : 1
+      }
+
+      if (broken.length === 0) {
+        done('全部会话归档完好，无需修复')
+        return 0
+      }
+
+      let fixed = 0
+      let skipped = 0
+      for (const r of broken) {
+        if (!r.repairable) {
+          skipped += 1
+          console.log(`\n${yellow('跳过（需人工）')} ${bold(r.session)}`)
+          for (const i of r.issues.slice(0, 3)) console.log(`  seq ${i.seq ?? '-'}｜${i.reason}`)
+          continue
+        }
+        const one = await repairFile(r.file, { apply, sessionId: r.session })
+        printRepairOne(one, args)
+        if (one.applied) fixed += 1
+      }
+      console.log('')
+      if (apply) done(`已修复 ${fixed} 个，跳过 ${skipped} 个（需人工）`)
+      else {
+        console.log(yellow('以上为试运行，未落盘。加 --apply 才真正修复。'))
+        done(`可自动修复 ${broken.length - skipped} 个，需人工 ${skipped} 个`)
+      }
+      return 0
+    }
+
     default: {
       fail(`未知命令：${cmd}`)
       console.log('')
@@ -329,6 +395,23 @@ const main = async () => {
       return 1
     }
   }
+}
+
+/** 打印单个会话的修复结果（CLI）。 */
+function printRepairOne(one, args) {
+  const mark = one.applied ? green('已修复') : one.projected ? yellow('试运行') : yellow('未改动')
+  console.log(`\n${mark} ${bold(one.sessionId)}`)
+  console.log(`  修复前：${one.before.issues.length} 处（可自动 ${one.before.autoCount}，需人工 ${one.before.manualCount}）`)
+  console.log(`  改动：${one.plan.report.length} 处`)
+  if (one.plan.report.length > 0) {
+    for (const e of one.plan.report.slice(0, 10)) {
+      console.log(`    seq ${e.seq}｜${e.type}｜来源 ${e.producer}｜补 id=${e.added?.id ?? '-'}`)
+    }
+  }
+  if (one.after !== null) console.log(`  修复后：${one.after.ok ? green('校验通过') : red(`仍有 ${one.after.issues.length} 处`)}`)
+  if (one.backup !== null) console.log(`  备份：${hideHome(one.backup, args)}`)
+  if (one.plan.reason !== null) console.log(`  ${red(one.plan.reason)}`)
+  for (const i of one.plan.remaining.slice(0, 5)) console.log(`    ${red(`seq ${i.seq ?? '-'}｜${i.reason}`)}`)
 }
 
 main()

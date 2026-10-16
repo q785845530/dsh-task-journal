@@ -168,13 +168,14 @@ dsh-journal retry --cwd "$PWD" --note "先补 0485"
 - **文件路径区**：列出日志目录、**会话原始文件**（`.dsh/sessions/.../session.v4.jsonl.zstd`）与各份日志的路径，方便直接打开
 - **统计卡片**：任务总数 / 已完成 / 未完成 / 失败记录 / 模型参数变更 / **子智能体委派**
 - **当前模型**：显示最近一次的 provider 与模型参数
-- **六个标签页**：
+- **七个标签页**：
   - 任务清单（带 `T` 编号与 `[x]`/`[ ]` 状态）
   - 未完成的问题（含原始错误码）
   - 模型与参数（每次变更一行）
   - **子智能体**（目录 + 分类标签 + 归档按钮，见下节）
   - **子智能体使用记录**（本会话每次委派）
   - 完整日志
+  - **会话修复**（扫描 / 诊断 / 修复 / 复验，见「会话修复」一节）
 - **实时刷新**：该会话有活跃 agent 时每 5 秒自动刷新
 - **操作反馈**：导出、重试与归档完成后右下角弹提示（带 ✅）
 
@@ -212,6 +213,10 @@ dsh-journal retry --cwd "$PWD" --note "先补 0485"
 | POST | `/api/dsh-journal/retry` | 一键重试（原会话内 followup） |
 | POST | `/api/dsh-journal/retry-new` | 开新会话续跑 |
 | POST | `/api/dsh-journal/abandon` | 标记任务失败 |
+| GET | `/api/dsh-journal/repair/scan` | **① 扫描**：体检全部会话归档（`?force=1` 忽略缓存） |
+| POST | `/api/dsh-journal/repair/fix` | **②③ 修复一个会话**（`session` 或 `file`；`apply:true` 才落盘） |
+| POST | `/api/dsh-journal/repair/fix-all` | **③ 批量修复**全部可自动修复的，并附带复验 |
+| GET | `/api/dsh-journal/repair/verify` | **④ 复验**：强制重扫，给出通过/不通过 |
 
 查询参数：`?session=<会话id>&cwd=<工作目录>`（都可省略，省略时取最近的会话）。
 
@@ -449,20 +454,77 @@ DSH 的会话归档是**边写边压缩**的：每次追加产生一个独立的
 - **不猜事实。** 子智能体的可用性只在真观察到时才写；源码找不到就如实说明，不伪造。
 - **失败不影响会话。** 任何写盘错误只记一条 warn。
 
+## 会话修复
+
+历史加载失败时（典型报错 `session event at seq <n> lacks an identified message`）用它。
+
+### 为什么会坏
+
+`Session.append()` 只校验事件外壳与 surface 元数据，**不校验消息形状**；消息不变量只在
+**加载**日志时才检查。于是插件若用 `session.append('user/message', { content, source })`
+写入（缺 `role` / `id`），事件能顺利落盘，却把该日志永久毒化——之后每次加载都失败。
+写入方当时毫无感觉，报错出现在很久以后、甚至另一个会话里。
+
+### 四步流水线
+
+界面的「会话修复」页签、`session_repair` 工具、`dsh-journal repair` 命令走的是同一条流水线，
+后端只有这一份实现：
+
+| 步骤 | 做什么 | 为什么不能省 |
+| --- | --- | --- |
+| ① 扫描 | 遍历会话归档，按「文件 size + mtime」指纹缓存 | 不扫描就没有可修的对象；缓存让重复扫描不必重解 100MB+ |
+| ② 诊断 | 逐事件校验，定级 `auto` / `manual`，并归因到插件 | 判定必须结构化——按错误文案判会把「同时缺 id 与 source」误判成可自动修 |
+| ③ 修复 | 只补 `role` / `id`，只重写含坏事件的帧 | 猜 `source` 会静默改变模型看到的历史，所以一律拒绝 |
+| ④ 复验 | 用**宿主的持久化后端**真读一次；读不过就自动回滚 | 自己的校验通过 ≠ 宿主能加载；这才是最终把关 |
+
+### 安全性质
+
+- **默认试运行**。界面先给「修完会怎样」，落盘要再点一次；CLI 要显式 `--apply`。
+- **只改坏行**。其余帧原字节保留；修复行用宿主自己的编码器序列化，字段顺序与既有行一致。
+- **确定性 id**。由 `sha256(会话id:seq)` 派生 → 同一输入两次修复字节一致（幂等，实测已验证）。
+- **先备份后落盘**，临时文件 + `rename` 发布；读取后文件若被并发改动则中止。
+- **运行中的会话拒绝修复**：进程内存状态与磁盘必须一致，改写会导致后续追加写错位置。
+- **只修登记过的文件**，不接受任意路径。
+
+### 分级的边界
+
+`auto`：只缺 `role` / `id`——两者都能由事件类型唯一推导。
+`manual`：`source` 非法、`content` 非数组、`toolCallId` 不匹配、缺消息对象等。
+这些一律不猜，只如实报告，让人来判断。
+
+### 模型工具与命令行
+
+```
+session_repair(action: scan | fix | fix_all | verify, session?, file?, apply?)
+dsh-journal repair [--session <id>] [--apply]
+```
+
 ## 自测
 
 ```bash
 cd ~/.dsh/plugins/dsh-task-journal
-node verify.mjs            # 插件逻辑：50 项
-node verify-cli.mjs        # 命令行：45 项
-node verify-api.mjs        # 界面 API：62 项
-node verify-subagent.mjs   # 子智能体目录 / 归档 / 记录 / 接口：95 项
+node verify-all.mjs        # 一键跑全部（推荐）
 ```
 
-共 **252 项**。覆盖：自动落盘、注入上下文排除、追加语义、自定义目录、全部工具、子代理会话排除、
+或逐个跑：
+
+```bash
+node verify.mjs            # 插件逻辑
+node verify-cli.mjs        # 命令行
+node verify-api.mjs        # 界面 API
+node verify-subagent.mjs   # 子智能体目录 / 归档 / 记录 / 接口
+node verify-repair.mjs     # 会话修复流水线（自造损坏样本）
+node verify-client.mjs     # 浏览器半渲染（含「会话修复」页签）
+```
+
+共 **365 项**。覆盖：自动落盘、注入上下文排除、追加语义、自定义目录、全部工具、子代理会话排除、
 禁用开关、超长截断、工具名映射、模型参数记录、用量、未完成任务与错误码、导出、重试、
 CLI 全部子命令与错误处理、子智能体分类与标签、运行期自动发现、HOME 遮蔽、归档产物、
-源码定位（找得到与找不到两种）、`subagents-*.md` 记录、`/subagents/*` 全部接口。
+源码定位（找得到与找不到两种）、`subagents-*.md` 记录、`/subagents/*` 全部接口，
+以及会话修复的：帧结构切分、诊断与归因、修复最小性、幂等、回滚、
+四步 API 串接、活跃会话跳过、路径遮蔽、浏览器半渲染。
+
+修复相关的自测**自造损坏样本**，不依赖真实会话数据，也不需要 DSH 宿主。
 
 ## 实现要点
 
@@ -472,6 +534,11 @@ CLI 全部子命令与错误处理、子智能体分类与标签、运行期自�
 - 订阅 `session/event`：`user/message`、`assistant/message`、`tool/call`、`tool/result`、`request/header`、`turn/end`。
 - 订阅 `subagent/start` 与 `subagent/end` 记录委派生命周期。
 - 子智能体目录与归档在 `lib/subagent-catalog.js`，host 半与 CLI 共用同一份实现。
+- 会话修复在 `lib/session-repair.js`，界面 / 工具 / CLI 共用同一份实现。
+  它只用 node 内建模块、**不 import 宿主包**：插件进程解析不到 `@deepseek-ai/dsh-session*`，
+  所以校验不变量在本地按宿主语义复刻一份，最终把关改走宿主已注册的 `sessionPersistence` 服务。
+- 帧切分按 zstd 的 frame/block 结构走，**不扫魔数**——魔数可能出现在压缩块内部，
+  按魔数切帧会把一个帧切碎并静默丢事件。
 - `journal_retry` 走 `agent.followup()`，且必须在事件分发之外调用（`setTimeout(0)`），否则宿主拒绝重入 append。
 - 写入用 `appendFile`；导出用 `copyFile`；源码归档用 `copyFile` 递归复制。
 

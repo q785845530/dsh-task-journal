@@ -8,10 +8,13 @@
 #   3) 注册 journal / journal_export / journal_retry 等工具；
 #   4) 记录子智能体的使用情况（subagents-*.md），并维护子智能体目录与归档；
 #   5) 配套命令行 `dsh-journal`（bin/）做导出、查看、目录浏览与归档；
-#   6) 提供 /api/dsh-journal/* 接口，供浏览器半的「任务日志」界面读取与操作。
+#   6) 提供 /api/dsh-journal/* 接口，供浏览器半的「任务日志」界面读取与操作；
+#   7) 体检并修复 DSH 会话归档（/api/dsh-journal/repair/* 与 session_repair 工具）：
+#      按「扫描 → 诊断 → 修复 → 复验」四步；只补消息缺失的 role/id，默认试运行，
+#      落盘前备份、落盘后由宿主持久化后端复验，读不过自动回滚。
 #
 # 浏览器半由 package.json 的 dsh.client 声明（exports["./client"] → lib/client.js），
-# 在设置页左侧导航加一项「任务日志」，右侧是完整面板（含「子智能体」页签）。
+# 在设置页左侧导航加一项「任务日志」，右侧是完整面板（含「子智能体」「会话修复」页签）。
 - insert:
     - id: dsh-task-journal
       name: dsh-task-journal

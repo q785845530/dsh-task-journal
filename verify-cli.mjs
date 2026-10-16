@@ -141,8 +141,58 @@ const main = async () => {
   ok(raw.code === 0, '--no-redact 可用')
   ok(raw.out.includes(root), '--no-redact 时输出完整路径')
 
+  // —— repair 子命令 ——
+  console.log('\n用例 12：repair 体检与修复会话归档')
+  {
+    const { zstdCompressSync, constants } = await import('node:zlib')
+    const opts = { params: { [constants.ZSTD_c_checksumFlag]: 1 } }
+    const frame = (t) => zstdCompressSync(Buffer.from(t), opts)
+    const sessRoot = await mkdtemp(join(tmpdir(), 'dsh-journal-cli-repair-'))
+    const proj = '--proj--'
+    const sid = 'session-cli-repair-1'
+    await mkdir(join(sessRoot, proj, sid), { recursive: true })
+    const header = `${JSON.stringify({ type: 'session', version: 4, id: sid, createdAt: 1, cwd: '/tmp' })}\n`
+    const good = { type: 'user/message', seq: 0, time: 1, surfaceOp: 'append', data: { content: [{ type: 'text', text: 'hi' }], source: { kind: 'user' }, role: 'user', id: 'g0' } }
+    const badEv = { type: 'user/message', seq: 1, time: 2, surfaceOp: 'append', data: { content: [{ type: 'text', text: 'notice' }], source: { kind: 'dsh-task-journal', form: 'notice', summary: 'n' } } }
+    const file = join(sessRoot, proj, sid, 'session.v4.jsonl.zstd')
+    await writeFile(file, Buffer.concat([
+      frame(header), frame(`${JSON.stringify(good)}\n`), frame(`${JSON.stringify(badEv)}\n`),
+    ]))
+
+    const env = { ...process.env, DSH_SESSIONS_DIR: sessRoot }
+    const runEnv = (a) => {
+      const r = spawnSync(process.execPath, [CLI, ...a], { encoding: 'utf8', env })
+      return { code: r.status, out: r.stdout ?? '', err: r.stderr ?? '' }
+    }
+
+    const dry = runEnv(['repair'])
+    ok(dry.code === 0, 'repair 试运行退出码 0')
+    ok(dry.out.includes('破损 1 个'), '报出破损数量')
+    ok(dry.out.includes('试运行'), '标注为试运行')
+    ok(dry.out.includes('可自动修复 1 个'), '报出可自动修复数量')
+    ok(!dry.out.includes('已修复'), '试运行不宣称已修复')
+
+    const applied = runEnv(['repair', '--apply'])
+    ok(applied.code === 0, 'repair --apply 退出码 0')
+    ok(applied.out.includes('已修复'), '宣称已修复')
+    ok(applied.out.includes('备份'), '报出备份路径')
+
+    const again = runEnv(['repair'])
+    ok(again.out.includes('破损 0 个'), '修完再体检：破损归零')
+    ok(again.out.includes('完好'), '给出「完好」结论')
+
+    const one = runEnv(['repair', '--session', sid])
+    ok(one.code === 0, '指定会话（已修好）退出码 0')
+    ok(one.out.includes('完好'), '指定会话提示无需修复')
+
+    const missing = runEnv(['repair', '--session', 'session-does-not-exist'])
+    ok(missing.code === 1, '指定不存在的会话退出码 1')
+
+    await rm(sessRoot, { recursive: true, force: true })
+  }
+
   // —— 错误处理 ——
-  console.log('\n用例 12：错误处理')
+  console.log('\n用例 13：错误处理')
   const bad = run(['export', '--cwd', join(root, 'nope')])
   ok(bad.code === 1, '无日志目录时退出码 1')
   ok(bad.err.includes('❌'), '错误输出带 ❌')
