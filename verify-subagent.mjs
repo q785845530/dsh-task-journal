@@ -260,6 +260,39 @@ const main = async () => {
   const taskText = existsSync(taskMd) ? await readFile(taskMd, 'utf8') : ''
   ok(taskText.includes('子智能体'), '主日志里也有子智能体痕迹')
 
+  // 任务记录里也要写上子智能体的使用情况：任务清单该行带 🤖 标记。
+  const taskListPath = join(hostLogDir, 'tasks-sg-session-1.md')
+  const taskList = existsSync(taskListPath) ? await readFile(taskListPath, 'utf8') : ''
+  const t1 = taskList.split('\n').find((l) => l.includes('[`T1`]')) ?? ''
+  ok(t1.includes('🤖'), '任务清单的任务行标注了子智能体使用')
+  ok(t1.includes('spawn 子智能体'), '标注里带子智能体名字')
+
+  // 重复派同一个子智能体：只累加计数，不重复追加名字。
+  ctx._emit(s, userMsg('再来一轮同样的委派'))
+  ctx._life('subagent/start', { runId: 'run-2', provider: 'spawn', id: 'child-2', local: true })
+  await settle()
+  const taskList2 = existsSync(taskListPath) ? await readFile(taskListPath, 'utf8') : ''
+  const t2 = taskList2.split('\n').find((l) => l.includes('[`T2`]')) ?? ''
+  ok(t2.includes('🤖 spawn 子智能体'), '第二条任务也标注了')
+
+  // 子智能体种类不同就并列写，不互相覆盖。
+  ctx._emit(s, userMsg('换个类型再派一次'))
+  ctx._life('subagent/start', { runId: 'run-3', provider: 'spawn', id: 'child-3', local: true })
+  ctx._life('subagent/start', { runId: 'run-4', provider: 'acp', id: 'child-4', local: true })
+  await settle()
+  const taskList3 = existsSync(taskListPath) ? await readFile(taskListPath, 'utf8') : ''
+  const t3 = taskList3.split('\n').find((l) => l.includes('[`T3`]')) ?? ''
+  ok(t3.includes('spawn 子智能体') && t3.includes('ACP 子智能体'),
+    '同一条任务用两类子智能体时都记下来')
+
+  // 同一任务里再派一次同一个（含正则元字符的名字）：只累加计数，不写第二遍。
+  ctx._emit(s, userMsg('同一任务里重复派'))
+  ctx._life('subagent/start', { runId: 'run-5', provider: 'subagent', id: 'c5', local: true })
+  await settle()
+  const list4 = existsSync(taskListPath) ? await readFile(taskListPath, 'utf8') : ''
+  const t4a = list4.split('\n').find((l) => l.includes('[`T4`]')) ?? ''
+  ok(t4a.includes('🤖'), '第四条任务标注了')
+
   console.log('\n七、关闭开关时不记录')
   const ctxOff = fakeCtx()
   apply(ctxOff, { enabled: true, recordSubagents: false, notify: false, notifyOnFailure: false })

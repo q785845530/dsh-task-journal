@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | `journal-<会话id>.md` | 完整日志：任务、产出、工具调用、模型参数、用量、轮次分隔 | 人读 |
 | `events-<会话id>.jsonl` | 一行一个 JSON 事件（含 usage、失败原因、子智能体生命周期） | 机读 |
-| `tasks-<会话id>.md` | 任务清单，带 `T` 编号与完成状态 `[x]`/`[ ]` | 人读 |
+| `tasks-<会话id>.md` | 任务清单，带 `T` 编号、完成状态与**子智能体用量标注** | 人读 |
 | `failures-<会话id>.md` | **未完成的任务与原因**，可直接重试 | 人读 |
 | `models-<会话id>.md` | **模型与参数**变更记录 | 人读 |
 | `subagents-<会话id>.md` | **子智能体使用情况**：每次委派的时间、子智能体、分类、结果 | 人读 |
@@ -306,11 +306,28 @@ dsh-journal retry --cwd "$PWD" --note "先补 0485"
 
 ### 记录使用情况
 
-两种情况都会写进 `subagents-<会话id>.md` 与 `events-*.jsonl`：
+三种落点，都在同一次委派发生时写入：
+
+- `subagents-<会话id>.md` —— 每次委派的完整块（时间、名字、分类、provider、子会话、结果），
+  以及 `events-*.jsonl` 里的 `subagent_start` / `subagent_end` / `subagent_tool` 事件
+- **任务清单 `tasks-<会话id>.md`** —— 直接在**那一条任务行**上标注，一眼看出这条任务用过什么：
+
+  ```
+  - [x] [`T1`] 2026-10-16 21:19:59｜重构导出模块　🤖 spawn 子智能体×2　🤖 代码审查子智能体
+  ```
+
+  同一个子智能体重复派只累加计数（`×2`），不同子智能体并列写。
+- `journal-<会话id>.md` —— 一条 HTML 注释，便于在主日志里按时间轴定位
+
+记录来源有两类，覆盖完整：
 
 - **子智能体生命周期**：`subagent/start` 与 `subagent/end`（含 provider、子会话 id、结束原因）
 - **委派工具调用**：`subagent`、`subagent_fork`、`spawn_teammate`、`workflow`、`oh_story_role`、
   `send_message`、`list_agents`、`interrupt_agent`、`list_subagent_models`
+
+> 生命周期事件本身**不带父会话 id**。插件优先用子会话的 `header.parentSession` 归因；
+> 只能退回推断时，会在记录里写明「推断」，并在 jsonl 里标 `attributed: false`——
+> 不把猜的当成确定的。
 
 关掉记录：配置 `recordSubagents: false`。
 
@@ -439,10 +456,10 @@ cd ~/.dsh/plugins/dsh-task-journal
 node verify.mjs            # 插件逻辑：50 项
 node verify-cli.mjs        # 命令行：45 项
 node verify-api.mjs        # 界面 API：62 项
-node verify-subagent.mjs   # 子智能体目录 / 归档 / 记录 / 接口：86 项
+node verify-subagent.mjs   # 子智能体目录 / 归档 / 记录 / 接口：95 项
 ```
 
-共 **243 项**。覆盖：自动落盘、注入上下文排除、追加语义、自定义目录、全部工具、子代理会话排除、
+共 **252 项**。覆盖：自动落盘、注入上下文排除、追加语义、自定义目录、全部工具、子代理会话排除、
 禁用开关、超长截断、工具名映射、模型参数记录、用量、未完成任务与错误码、导出、重试、
 CLI 全部子命令与错误处理、子智能体分类与标签、运行期自动发现、HOME 遮蔽、归档产物、
 源码定位（找得到与找不到两种）、`subagents-*.md` 记录、`/subagents/*` 全部接口。
