@@ -135,12 +135,38 @@ dsh-journal retry --cwd /home/wsn/文档/dsh --note "先补 0485"
 | GET | `/api/dsh-journal/failures` | 未完成任务 |
 | GET | `/api/dsh-journal/models` | 模型记录 |
 | GET | `/api/dsh-journal/journal` | 完整日志（尾部截断） |
+| GET | `/api/dsh-journal/history` | **历史会话列表**（含旧会话，支持 `?q=` 筛选） |
+| GET | `/api/dsh-journal/history/digest` | **单个历史会话的存档摘要** |
 | POST | `/api/dsh-journal/export` | 导出结果 |
 | POST | `/api/dsh-journal/retry` | 一键重试（原会话内 followup） |
 | POST | `/api/dsh-journal/retry-new` | 开新会话续跑 |
 | POST | `/api/dsh-journal/abandon` | 标记任务失败 |
 
 查询参数：`?session=<会话id>&cwd=<工作目录>`（都可省略，省略时取最近的会话）。
+
+## 历史会话查询
+
+面板顶部有「**历史会话**」按钮，打开后可以浏览磁盘上的**全部** DSH 会话（包括插件安装之前的老会话）：
+
+- 按会话 id 或工作目录**筛选**
+- 显示每个会话的时间、存档大小、工作目录
+- 标记「**有任务日志**」（插件记录过的）或「**仅会话存档**」
+- 点任意一行 → 预览该会话的**轮数、任务数、产出数**与最近的任务/产出原文
+- 点「**打开**」→ 切换到这个会话的日志视图
+
+### 怎么读到旧会话的
+
+DSH 的会话归档是**边写边压缩**的：每次追加产生一个独立的 zstd 帧，一个 4MB 的会话可能有几千帧。插件按 zstd 魔数切帧、逐帧解压再拼接，所以能读出完整内容。只用 Node 内置的 `zlib`，无外部依赖。
+
+## 记住上次的会话
+
+面板会**记住上次选中的会话和标签页**（存在浏览器 `localStorage`）：
+
+- 下次打开直接回到那个会话，不用重新找
+- 如果那个会话这次没出现在列表里，选择器仍会保留它并标注「（上次的会话）」，不会悄悄跳走
+- 新任务照常**追加**到该会话的日志里（日志是只追加的，不会覆盖旧记录）
+
+不想记住就在浏览器里清掉 `dsh-task-journal:last-session` 这个键。
 
 ## 模型工具
 
@@ -210,7 +236,7 @@ dsh-journal retry --cwd /home/wsn/文档/dsh --note "先补 0485"
 cd ~/.dsh/plugins/dsh-task-journal
 node verify.mjs       # 插件逻辑：50 项
 node verify-cli.mjs   # 命令行：28 项
-node verify-api.mjs   # 界面 API：45 项
+node verify-api.mjs   # 界面 API：62 项
 ```
 
 覆盖：自动落盘、注入上下文排除、追加语义、自定义目录、三个工具、子代理排除、禁用开关、超长截断、工具名映射、模型参数记录、用量、未完成任务与错误码、导出、重试、CLI 全部子命令与错误处理。
