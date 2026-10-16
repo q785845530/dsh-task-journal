@@ -79,11 +79,15 @@ dsh plugin --profile web add github:q785845530/dsh-task-journal#main
 
 ```bash
 git clone https://github.com/q785845530/dsh-task-journal.git ~/.dsh/plugins/dsh-task-journal
+cd ~/.dsh/plugins/dsh-task-journal && npm install   # 装运行时依赖 @deepseek-ai/dsh-tools
 dsh plugin --profile web add link:~/.dsh/plugins/dsh-task-journal
 ```
 
 > `link:` 后面必须给**绝对路径**。上面用 `~` 是 shell 展开的结果；
 > 如果手工填写，请写成完整路径（如 `/home/<你>/.dsh/plugins/dsh-task-journal`）。
+>
+> 方式一由 pnpm 自动装依赖，所以不需要这一步；方式二手动克隆，
+> 必须自己 `npm install`，否则插件加载时会报 `Cannot find package '@deepseek-ai/dsh-tools'`。
 
 装完**重启一次 DSH** 生效。确认已挂上：
 
