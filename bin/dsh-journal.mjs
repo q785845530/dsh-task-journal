@@ -26,6 +26,8 @@ import {
   writeCatalog, archiveSources, subagentDir, redactHome, redactSecrets,
 } from '../lib/subagent-catalog.js'
 import { statusLabel } from '../lib/updates.js'
+import { listLogFiles, readLogFile, logsDir } from '../lib/logs.js'
+import { plan as planLogFix } from '../lib/log-repair.js'
 
 const USAGE = `dsh-journal — 任务日志命令行
 
@@ -39,6 +41,9 @@ const USAGE = `dsh-journal — 任务日志命令行
   dsh-journal retry    [--note <补充>]                    打印重试指引（不唤醒会话）
   dsh-journal repair   [--session <id>] [--apply]         体检并修复会话归档（默认试运行）
   dsh-journal updates  [--apply <包名>] [--url <地址>]     查看/升级已安装插件（走运行中的 DSH）
+  dsh-journal logs     [--limit <n>]                     列出 DSH 启动诊断日志
+  dsh-journal logs     --read <文件名>                    读某一份的结论
+  dsh-journal logs     --plan <文件名>                    出修复方案（不动手）
 
 通用参数：
   --cwd <目录>      工作目录（默认当前目录）
@@ -58,7 +63,9 @@ repair 修复的是 DSH 的会话归档（<会话根>/<项目>/<id>/session.v4.j
 
 updates 读的是**运行中的 DSH**：插件管理服务只活在宿主进程里，命令行起不来它。
 所以要先用 dsh web 把界面跑起来，再用 --url 指向它（默认 http://127.0.0.1:3080）。
---apply <包名> 会真的升级：先移除旧版，再装市场索引给出的版本。`
+--apply <包名> 会真的升级：先移除旧版，再装市场索引给出的版本。
+logs 读的是 $DSH_HOME/logs/startup-*.log —— DSH 启动失败时落盘的诊断快照。
+`
 
 /** HOME 遮蔽：默认开启。 */
 const hideHome = (p, args) => (args !== undefined && args['no-redact'] === true
@@ -479,6 +486,68 @@ const main = async () => {
       }
       const note = r.body.application === 'restart-required' ? '（需要重启 DSH 才生效）' : ''
       done(`已把 ${r.body.name} 从 ${r.body.from ?? '未知'} 升到 ${r.body.to ?? '未知'}${note}`)
+      return 0
+    }
+
+    case 'logs': {
+      // 日志在磁盘上，命令行可以自己读 —— 只有「动手修」才需要宿主。
+      const wantName = typeof args.read === 'string' && args.read !== ''
+        ? args.read
+        : (typeof args.plan === 'string' && args.plan !== '' ? args.plan : null)
+
+      if (wantName === null) {
+        const r = await listLogFiles(logsDir(), { limit: Number(args.limit) || 10 })
+        if (r.exists !== true) {
+          fail(`日志目录不存在：${r.dir}`)
+          console.log(dim('  DSH 只在启动失败时写这些文件，目录不存在说明还没失败过。'))
+          return 1
+        }
+        console.log(bold(`日志目录：${r.dir}`))
+        console.log(dim(`共 ${r.total} 份，下面是最近 ${r.files.length} 份`))
+        for (const f of r.files) {
+          console.log(`  ${f.at}  ${Math.round(f.bytes / 1024)}KB  ${dim(f.name)}`)
+        }
+        console.log('')
+        console.log(dim('看某一份：dsh-journal logs --read <文件名>'))
+        console.log(dim('出修复方案：dsh-journal logs --plan <文件名>'))
+        return 0
+      }
+
+      const r = await readLogFile(logsDir(), wantName)
+      const broken = r.broken
+      console.log(bold(wantName))
+      console.log(dim(`时间 ${r.header.timestamp ?? '未知'}｜DSH ${r.header.dshVersion ?? '未知'}｜profile ${r.header.profile ?? '未知'}`))
+      console.log(broken ? red('启动失败') : green('没有启动失败记录'))
+      console.log(dim(`运行时告警 ${r.warnCount} 条，错误 ${r.errorCount} 条`))
+      if (r.failedPlugins.length > 0) {
+        console.log('')
+        console.log(bold('失败插件：'))
+        for (const p of r.failedPlugins) {
+          console.log(`  ${p.id}${p.required ? '（必装）' : ''}  ${dim(p.packages.join('、') || '包名未记录')}`)
+          for (const e of p.errors.slice(0, 3)) console.log(dim(`    ${e.slice(0, 160)}`))
+        }
+      }
+      if (r.issues.length > 0) {
+        console.log('')
+        console.log(bold('诊断：'))
+        for (const i of r.issues) console.log(`  ${yellow(i.title)}：${i.explain}`)
+      } else {
+        console.log('')
+        console.log(dim('没有认得出的故障。'))
+      }
+      if (typeof args.plan === 'string' && args.plan !== '') {
+        const steps = planLogFix(r)
+        console.log('')
+        console.log(bold('修复方案：'))
+        for (const st of steps) {
+          console.log(`  [${st.action}] ${st.label}`)
+          if (st.command) console.log(dim(`     $ ${st.command}`))
+          if (st.why) console.log(dim(`     ${st.why}`))
+        }
+        const manual = r.issues.flatMap((i) => i.fixes.filter((f) => f.kind === 'manual'))
+        for (const f of manual) console.log(`  [人工] ${f.label}\n${dim(`     ${f.why ?? ''}`)}`)
+        if (steps.length === 0 && manual.length === 0) console.log(dim('  没有可执行的修复步骤。'))
+      }
       return 0
     }
 
