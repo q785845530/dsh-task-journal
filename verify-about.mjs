@@ -45,9 +45,12 @@ const main = async () => {
   // ————— 二、自身信息 —————
   console.log('\n二、自身信息')
   const dir = pluginDir()
-  ok(typeof dir === 'string' && dir.includes('dsh-task-journal'), `自身目录可定位（${dir}）`)
+  // 不要断言目录名里含仓库名 —— 克隆到任意目录（/tmp/freshN）就跑不过。
+  // 该断言的是「这里确实是本插件的目录」，也就是它有正确的 package.json。
   const manifest = await readManifest()
-  ok(manifest !== null && manifest.name === 'dsh-task-journal', '读到自身 package.json')
+  ok(typeof dir === 'string' && dir !== '', `自身目录可定位（${dir}）`)
+  ok(manifest !== null && manifest.name === 'dsh-task-journal', '读到的 package.json 就是本插件的')
+  ok(Array.isArray(manifest.exports) === false, 'package.json 结构正常')
   ok(manifest.repository !== undefined, '声明了 repository（Star 与链接依赖它）')
   const remote = await gitRemote(dir)
   ok(remote === null || typeof remote === 'string', '读 git 远端不抛异常')
