@@ -46,5 +46,13 @@
     "journal",
     "task-log",
     "worklog"
-  ]
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:q785845530/dsh-task-journal.git"
+  },
+  "homepage": "https://github.com/q785845530/dsh-task-journal",
+  "bugs": {
+    "url": "https://github.com/q785845530/dsh-task-journal/issues"
+  }
 }

@@ -331,6 +331,139 @@ const main = async () => {
   const leftCol = mirCols.n >= 2
   ok(leftCol, '两栏都渲染出来了')
 
+  console.log('\n七、关于页签渲染')
+  sharedStore.set('dsh-task-journal:last-tab', 'about')
+  // 注入一份真实形状的 about 数据（字段与 lib/about.js 的 gather 一致）。
+  const aboutPayload = {
+    ok: true,
+    self: { name: 'dsh-task-journal', version: '0.1.0', dir: '/home/u/.dsh/plugins/dsh-task-journal',
+      dirDisplay: '~/.dsh/plugins/dsh-task-journal', license: 'MIT', engines: { node: '>=22.5', dsh: '>=0.1.7-rc.2' },
+      dependencyCount: 1, repo: 'https://github.com/q785845530/dsh-task-journal',
+      repoSlug: 'q785845530/dsh-task-journal', remote: 'git@github.com:q785845530/dsh-task-journal.git' },
+    github: { ok: true, stars: 7, forks: 2, openIssues: 1, pushedAt: '2026-10-17T16:00:00Z', license: 'MIT' },
+    commands: { install: 'dsh plugin --profile web add dsh-task-journal',
+      uninstall: 'dsh plugin --profile web remove dsh-task-journal',
+      installFromGit: 'dsh plugin --profile web add https://github.com/q785845530/dsh-task-journal' },
+    reload: { startedAt: 1792257000000, uptimeMs: 60000, reloadCount: 2, moduleLoads: 3,
+      hotReloaded: true, moduleFirstAt: 1792257000000, moduleLoadedAt: 1792257600000,
+      lastReloadAt: 1792257600000,
+      lastReloadFiles: ['/a/lib/index.js'], eventSubscribed: true, filesNewerThanStart: null, mtimes: [] },
+    data: { dir: '/home/u/proj/.dsh-journal', dirDisplay: '~/proj/.dsh-journal', exists: true, bytes: 2048, files: 4, truncated: false },
+    profiles: { detected: ['web'], linked: ['web'], scanned: 2, active: 'web', assumed: false },
+    installed: [
+      { name: 'dsh-task-journal', version: '0.1.0', enabled: true, removable: true, official: false, source: 'link:', local: true },
+      { name: 'dsh-repair', version: '0.1.0', enabled: true, removable: true, official: false, source: 'registry', local: false },
+    ],
+    links: { repo: 'https://github.com/q785845530/dsh-task-journal',
+      issues: 'https://github.com/q785845530/dsh-task-journal/issues',
+      readme: 'https://github.com/q785845530/dsh-task-journal#readme',
+      star: 'https://github.com/q785845530/dsh-task-journal' },
+  }
+  const aboutUpdates = { ok: true, counts: { installed: 2, updatable: 1, appliable: 1, blocked: 0 },
+    source: 'registry', plugins: [
+      { name: 'dsh-task-journal', version: '0.1.0', updatable: true, removable: true, blocked: null,
+        market: { status: 'update-available', latestVersion: '0.2.0' } },
+    ] }
+  const aboutFetch = async (url) => {
+    const u = String(url)
+    if (u.includes('/about')) return { ok: true, status: 200, json: async () => aboutPayload }
+    if (u.includes('/updates')) return { ok: true, status: 200, json: async () => aboutUpdates }
+    return { ok: true, status: 200, json: async () => ({ ok: true }) }
+  }
+  const { mod: mod5, React: React5 } = loadBundle(sharedStore, aboutFetch)
+  let section5 = null
+  const slots5 = { register: (spec, Comp) => { section5 = { spec, Comp } }, inject: (n, cb) => cb() }
+  mod5.apply({ effect: (f) => f(), slots: slots5 })
+  React5._reset()
+  let aboutTree = null
+  let aboutErr = null
+  try { aboutTree = section5.Comp({}) } catch (e) { aboutErr = e }
+  ok(aboutErr === null, '关于页签渲染不抛异常' + (aboutErr === null ? '' : `：${aboutErr.message}`))
+  const collect5 = { buttons: [], codes: [], texts: [] }
+  const seen5 = new Set()
+  const render5 = (node, depth = 0) => {
+    // 字符串要在「不是对象就返回」之前收掉，否则文字全被丢掉。
+    if (typeof node === 'string') { collect5.texts.push(node); return }
+    if (node === null || node === undefined || typeof node !== 'object') return
+    if (depth > 45) return
+    if (Array.isArray(node)) { for (const c of node) render5(c, depth); return }
+    if (typeof node.type === 'function') {
+      if (seen5.has(node.type)) return
+      seen5.add(node.type)
+      render5(node.type(node.props), depth + 1)
+      return
+    }
+    if (node.type === 'button' && typeof node.children?.[0] === 'string') collect5.buttons.push(node.children[0])
+    if (node.type === 'code' && typeof node.children?.[0] === 'string') collect5.codes.push(node.children[0])
+    for (const c of node.children ?? []) render5(c, depth)
+  }
+  render5(aboutTree)
+  // 先渲染一次让 effect 登记，再 flush 加载数据，再重渲染
+  await React5._flush()
+  collect5.buttons.length = 0; collect5.codes.length = 0; collect5.texts.length = 0
+  seen5.clear()
+  React5._reset()
+  try { aboutTree = section5.Comp({}) } catch (e) { aboutErr = e }
+  render5(aboutTree)
+
+  const allText = collect5.texts.join(' ')
+  ok(collect5.buttons.some((b) => b.includes('Star')), `有「去 GitHub 点 Star」按钮（${collect5.buttons.join(' / ')}）`)
+  ok(collect5.buttons.some((b) => b.includes('刷新')), '有刷新按钮')
+  ok(collect5.buttons.some((b) => b.includes('升级到')), `有升级按钮（含目标版本）`)
+  ok(collect5.buttons.some((b) => b.includes('提 Issue')), '有提 Issue 按钮')
+  ok(collect5.codes.some((c) => c.includes('~/.dsh/plugins/dsh-task-journal')), '显示本地路径')
+  ok(collect5.codes.some((c) => c.includes('dsh plugin --profile web add')), '显示安装命令')
+  ok(collect5.codes.some((c) => c.includes('remove')), '显示卸载命令')
+  ok(allText.includes('0.1.0'), '显示版本')
+  ok(allText.includes('链接安装'), '标出链接安装方式')
+  ok(allText.includes('0.2.0'), '显示可升级到的版本')
+  ok(allText.includes('插件模块加载'), '显示模块加载次数（热重载的可靠证据）')
+  ok(allText.includes('磁盘与进程一致'), '显示磁盘与进程是否一致')
+  ok(allText.includes('dsh-repair'), '列出全部已安装插件')
+  ok(allText.includes('本地来源'), '标出本地来源的插件')
+
+  // 磁盘比进程新时，要明确提示「改了没生效」
+  // 这次模拟「没热重载过」：moduleLoads 仍是 1。
+  const staleAbout = { ...aboutPayload, reload: { ...aboutPayload.reload, moduleLoads: 1, hotReloaded: false,
+    filesNewerThanStart: { file: '/x/lib/index.js', mtime: 1792299999000 } } }
+  const staleFetch = async (url) => {
+    const u = String(url)
+    if (u.includes('/about')) return { ok: true, status: 200, json: async () => staleAbout }
+    if (u.includes('/updates')) return { ok: true, status: 200, json: async () => aboutUpdates }
+    return { ok: true, status: 200, json: async () => ({ ok: true }) }
+  }
+  const store2 = new Map()
+  // 新 store 不会记住页签，会退回默认的「任务清单」——先设成 about。
+  store2.set('dsh-task-journal:last-tab', 'about')
+  const { mod: mod6, React: React6 } = loadBundle(store2, staleFetch)
+  let section6 = null
+  mod6.apply({ effect: (f) => f(), slots: { register: (s2, C) => { section6 = { spec: s2, Comp: C } }, inject: (n, cb) => cb() } })
+  React6._reset()
+  let staleTree = null
+  try { staleTree = section6.Comp({}) } catch { staleTree = null }
+  const seen6 = new Set()
+  const texts6 = []
+  const render6 = (node, depth = 0) => {
+    if (typeof node === 'string') { texts6.push(node); return }
+    if (node === null || node === undefined || typeof node !== 'object') return
+    if (depth > 45) return
+    if (Array.isArray(node)) { for (const c of node) render6(c, depth); return }
+    if (typeof node.type === 'function') {
+      if (seen6.has(node.type)) return
+      seen6.add(node.type); render6(node.type(node.props), depth + 1); return
+    }
+    for (const c of node.children ?? []) render6(c, depth)
+  }
+  render6(staleTree)
+  await React6._flush()
+  texts6.length = 0; seen6.clear(); React6._reset()
+  try { staleTree = section6.Comp({}) } catch { staleTree = null }
+  render6(staleTree)
+  const staleText = texts6.join(' ')
+  ok(staleText.includes('改动还没生效'), '磁盘比进程新时提示「改动还没生效」')
+  ok(staleText.includes('磁盘有改动'), '状态标为「磁盘有改动」')
+  ok(staleText.includes('需要重启'), '未热重载时说清需要重启（不让人白等自动重载）')
+
   console.log(`\n${pass} passed, ${fail} failed`)
   if (fail > 0) process.exit(1)
 }

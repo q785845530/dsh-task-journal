@@ -23,7 +23,8 @@ const SUITES = [
   ['verify-updates.mjs', '插件更新（版本比较、兼容性拦截、升级顺序）'],
   ['verify-logs.mjs', '后台日志（解析、诊断、修复白名单、路径穿越）'],
   ['verify-mirrors.mjs', '镜像源（清单、配置改写、备份恢复、测速）'],
-  ['verify-client.mjs', '浏览器半渲染（含「会话修复」「插件更新」「后台日志」「镜像源」页签）'],
+  ['verify-about.mjs', '关于（仓库归一化、GitHub 降级、热重载、profile 检测）'],
+  ['verify-client.mjs', '浏览器半渲染（含「会话修复」「插件更新」「后台日志」「镜像源」「关于」页签）'],
 ]
 
 let failed = 0
