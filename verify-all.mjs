@@ -20,7 +20,8 @@ const SUITES = [
   ['verify-api.mjs', 'HTTP API'],
   ['verify-subagent.mjs', '子智能体目录与归档'],
   ['verify-repair.mjs', '会话修复流水线（含损坏样本）'],
-  ['verify-client.mjs', '浏览器半渲染（含「会话修复」页签）'],
+  ['verify-updates.mjs', '插件更新（版本比较、兼容性拦截、升级顺序）'],
+  ['verify-client.mjs', '浏览器半渲染（含「会话修复」「插件更新」页签）'],
 ]
 
 let failed = 0

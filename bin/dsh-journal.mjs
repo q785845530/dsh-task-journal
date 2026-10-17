@@ -25,6 +25,7 @@ import {
   builtinEntries, groupByCategory, normalizeCategory, categoryIds,
   writeCatalog, archiveSources, subagentDir, redactHome, redactSecrets,
 } from '../lib/subagent-catalog.js'
+import { statusLabel } from '../lib/updates.js'
 
 const USAGE = `dsh-journal — 任务日志命令行
 
@@ -37,6 +38,7 @@ const USAGE = `dsh-journal — 任务日志命令行
   dsh-journal agents   --archive [--sources]              归档目录（可选含源码）
   dsh-journal retry    [--note <补充>]                    打印重试指引（不唤醒会话）
   dsh-journal repair   [--session <id>] [--apply]         体检并修复会话归档（默认试运行）
+  dsh-journal updates  [--apply <包名>] [--url <地址>]     查看/升级已安装插件（走运行中的 DSH）
 
 通用参数：
   --cwd <目录>      工作目录（默认当前目录）
@@ -52,7 +54,11 @@ const USAGE = `dsh-journal — 任务日志命令行
 
 repair 修复的是 DSH 的会话归档（<会话根>/<项目>/<id>/session.v4.jsonl.zstd），
 不是本插件的任务日志。历史加载报 "lacks an identified message" 时用它。
-只补消息缺失的 role/id，不改内容；落盘前自动备份，默认试运行。`
+只补消息缺失的 role/id，不改内容；落盘前自动备份，默认试运行。
+
+updates 读的是**运行中的 DSH**：插件管理服务只活在宿主进程里，命令行起不来它。
+所以要先用 dsh web 把界面跑起来，再用 --url 指向它（默认 http://127.0.0.1:3080）。
+--apply <包名> 会真的升级：先移除旧版，再装市场索引给出的版本。`
 
 /** HOME 遮蔽：默认开启。 */
 const hideHome = (p, args) => (args !== undefined && args['no-redact'] === true
@@ -387,6 +393,92 @@ const main = async () => {
         console.log(yellow('以上为试运行，未落盘。加 --apply 才真正修复。'))
         done(`可自动修复 ${broken.length - skipped} 个，需人工 ${skipped} 个`)
       }
+      return 0
+    }
+
+    case 'updates': {
+      // 插件管理服务只活在宿主进程里，命令行自己拿不到 ——
+      // 所以走运行中的 DSH 的 HTTP 接口，而不是本地重算。
+      const base = typeof args.url === 'string' && args.url !== ''
+        ? String(args.url).replace(/\/+$/, '')
+        : (process.env.DSH_WEB_URL ?? 'http://127.0.0.1:3080').replace(/\/+$/, '')
+      const endpoint = `${base}/api/dsh-journal/updates`
+      const wanted = typeof args.apply === 'string' && args.apply !== '' ? args.apply : null
+
+      const reach = async (url, init) => {
+        try {
+          const res = await fetch(url, { ...init, signal: AbortSignal.timeout(60000) })
+          const text = await res.text()
+          let body = null
+          try { body = JSON.parse(text) } catch { /* 非 JSON 就只报状态码 */ }
+          return { ok: true, status: res.status, body, text }
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) }
+        }
+      }
+
+      if (wanted === null) {
+        const r = await reach(endpoint)
+        if (!r.ok) {
+          fail(`连不上运行中的 DSH：${base}（${r.error}）`)
+          console.log(dim('  插件管理服务只在宿主进程里。先启动 `dsh web`，再用 --url 指定地址。'))
+          return 1
+        }
+        if (r.body === null) {
+          fail(`接口返回了非 JSON（HTTP ${r.status}）`)
+          console.log(dim(`  ${r.text.slice(0, 200)}`))
+          return 1
+        }
+        if (r.body.ok !== true) {
+          fail(`插件更新不可用：${r.body.reason ?? '未知原因'}`)
+          return 1
+        }
+        const c = r.body.counts ?? {}
+        console.log(bold(`已安装 ${c.installed ?? 0} 个插件，可更新 ${c.updatable ?? 0} 个（可一键升级 ${c.appliable ?? 0} 个）`))
+        // 版本来源要讲清楚：市场是权威的，registry 是退路。
+        if (r.body.source === 'market') console.log(dim('版本来源：插件市场'))
+        else {
+          console.log(dim(`版本来源：npm registry（${r.body.registry ?? '默认地址'}）`))
+          if (r.body.market !== true) console.log(dim(`  插件市场未装配：${r.body.marketReason ?? ''}`))
+        }
+        for (const p of (r.body.plugins ?? [])) {
+          const arrow = p.updatable ? ` → ${p.market.latestVersion}` : ''
+          const tag = p.updatable ? yellow('可更新') : p.market.status === 'installed' ? green('已最新') : dim(statusLabel(p.market.status))
+          const lock = p.removable ? '' : dim('（不可移除）')
+          const blk = p.blocked ? dim(`  ⚠ ${p.blocked}`) : ''
+          console.log(`  ${p.updatable ? '↑' : ' '} ${bold(p.name)}  ${p.version ?? '未知'}${arrow}  ${tag}${lock}${blk}`)
+        }
+        if ((c.appliable ?? 0) > 0) {
+          console.log('')
+          console.log(dim('升级：dsh-journal updates --apply <包名>（会先移除旧版，再装新版）'))
+        }
+        return 0
+      }
+
+      const r = await reach(`${endpoint}/apply`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: wanted, confirm: true }),
+      })
+      if (!r.ok) {
+        fail(`连不上运行中的 DSH：${base}（${r.error}）`)
+        return 1
+      }
+      if (r.body === null) {
+        fail(`接口返回了非 JSON（HTTP ${r.status}）`)
+        return 1
+      }
+      for (const s of (r.body.steps ?? [])) {
+        const how = s.result?.application ?? '?'
+        const why = s.result?.error?.code ? `（${s.result.error.code}）` : ''
+        console.log(dim(`  ${s.step}：${how}${why}`))
+      }
+      if (r.body.ok !== true) {
+        fail(`升级 ${wanted} 未完成：${r.body.reason ?? '未知原因'}`)
+        return 1
+      }
+      const note = r.body.application === 'restart-required' ? '（需要重启 DSH 才生效）' : ''
+      done(`已把 ${r.body.name} 从 ${r.body.from ?? '未知'} 升到 ${r.body.to ?? '未知'}${note}`)
       return 0
     }
 

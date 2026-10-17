@@ -529,6 +529,50 @@ session_repair(action: scan | fix | fix_all | verify, session?, file?, apply?)
 dsh-journal repair [--session <id>] [--apply]
 ```
 
+## 插件更新
+
+DSH 的插件市场只**报告** `update-available`，自己不升级：官方插件的「更新」由 Discover 页走「先移除、再安装」，第三方插件没有这条路。这个页签把那条路做掉。
+
+界面上的「**插件更新**」页签（或 `journal_updates` 工具、`dsh-journal updates` 命令）会列出 profile 里已安装的插件、当前版本与可用更新，需要时一键升级。
+
+### 两个版本来源
+
+| 来源 | 何时用 | 怎么判 |
+|---|---|---|
+| **插件市场**（`pluginMarket` 服务） | 装配了市场时优先 | 权威：自带兼容性与版本豁免判断 |
+| **npm registry** | 市场没装配时 | 读目标版本的 `engines.dsh`，自己比 |
+
+随附 profile **默认不挂** `pluginMarket`（它由 `@deepseek-ai/dsh-experimental-plugin-market-bundle` 提供），所以多数情况下走的是 registry 这条路。两条都会在界面上写明用的是哪条。
+
+### 升级为什么是「先移除、再安装」
+
+启用 HMR 的 profile 里，在已安装的包上再装一个版本会以 `already-installed` 失败（见 DSH 的 `docs/upgrade-guide/v0.2.1-alpha.2/plugin-install-over-installed`）。所以升级必须是两步。
+
+**移除之后没有回退。** 这个顺序带来一个真实风险：目标版本装不上，插件就没了。所以升级前会先过兼容性：
+
+- 目标版本声明 `engines.dsh` 而当前运行时不满足 → **拦下不升**，并写明要求与现状；
+- 版本判断用 `lib/semver.js`，口径**刻意与 DSH 一致**（`semver.satisfies(v, r, { includePrerelease: true })`）。比 DSH 严会拦下本该能升的包；比 DSH 松会在移除之后被 DSH 拒绝安装，把插件弄丢；
+- 移除失败或抛异常 → 不再安装，如实报告；
+- 移除成功但安装失败 → 明确说「现在处于未安装状态」，不假装还是旧版本。
+
+### 只做该做的事
+
+- **只升级已安装的包。** 不接受任意包名 —— 否则这个接口就成了任意包安装器，一个本地请求就能把任意代码装进 profile。
+- **装哪个版本由版本来源决定。** 请求里只能给包名，spec 由来源推导。
+- **写操作要显式确认**（接口要 `confirm: true`，界面会再问一次）。
+- **本地链接/仓库来源的包不参与**（`link:`、`file:`、绝对路径、`git+`、`github:`）—— 它们没有 registry 版本可升。
+- 不可移除的包不能走这条路。
+
+### 模型工具与命令行
+
+```
+journal_updates(action: list | apply, name?, confirm?, enabled?)
+dsh-journal updates                 # 列出已安装插件与可用更新
+dsh-journal updates --apply <包名>   # 升级一个（会先移除旧版，再装新版）
+```
+
+命令行自己起不来插件管理服务（它只活在宿主进程里），所以 `updates` 走**运行中的 DSH** 的 HTTP 接口：默认 `http://127.0.0.1:3080`，可用 `--url` 或 `DSH_WEB_URL` 指定。界面没起来时它会明确告诉你。
+
 ## 自测
 
 ```bash
@@ -544,17 +588,21 @@ node verify-cli.mjs        # 命令行
 node verify-api.mjs        # 界面 API
 node verify-subagent.mjs   # 子智能体目录 / 归档 / 记录 / 接口
 node verify-repair.mjs     # 会话修复流水线（自造损坏样本）
+node verify-updates.mjs    # 插件更新（版本比较、兼容性拦截、升级顺序）
 node verify-client.mjs     # 浏览器半渲染（含「会话修复」页签）
 ```
 
-共 **430 项**。覆盖：自动落盘、注入上下文排除、追加语义、自定义目录、全部工具、子代理会话排除、
+共 **533 项**。覆盖：自动落盘、注入上下文排除、追加语义、自定义目录、全部工具、子代理会话排除、
 禁用开关、超长截断、工具名映射、模型参数记录、用量、未完成任务与错误码、导出、重试、
 CLI 全部子命令与错误处理、子智能体分类与标签、运行期自动发现、HOME 遮蔽、凭据遮蔽、
 归档凭据擦除（帧级最小性、幂等、头部命中）、
 日志目录权限与自忽略、归档产物、源码定位（找得到与找不到两种）、`subagents-*.md` 记录、
 `/subagents/*` 全部接口，
 以及会话修复的：帧结构切分、诊断与归因、修复最小性、幂等、回滚、
-四步 API 串接、活跃会话跳过、路径遮蔽、浏览器半渲染。
+四步 API 串接、活跃会话跳过、路径遮蔽、浏览器半渲染；
+插件更新的：语义化版本比较与范围判断（口径对齐 DSH 的 includePrerelease）、
+来源判定、市场路径与 registry 退路、兼容性拦截、升级顺序与参数、
+各种失败处理、接口与工具。
 
 修复相关的自测**自造损坏样本**，不依赖真实会话数据，也不需要 DSH 宿主。
 

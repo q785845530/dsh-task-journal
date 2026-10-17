@@ -198,6 +198,40 @@ const main = () => {
   ok(buttons.some((b) => b.includes('复验')), '有复验按钮')
   ok(buttons.some((b) => b.includes('批量修复')), '有批量修复按钮')
 
+  console.log('\n五、插件更新页签渲染')
+  sharedStore.set('dsh-task-journal:last-tab', 'updates')
+  const { mod: mod3, React: React3 } = loadBundle(sharedStore)
+  let section3 = null
+  const slots3 = {
+    register: (spec, Comp) => { section3 = { spec, Comp } },
+    inject: (name, cb) => cb(),
+  }
+  mod3.apply({ effect: (f) => f(), slots: slots3 })
+  React3._reset()
+  let updTree = null
+  let updErr = null
+  try { updTree = section3.Comp({}) } catch (e) { updErr = e }
+  ok(updErr === null, '更新页签渲染不抛异常' + (updErr === null ? '' : `：${updErr.message}`))
+  const updButtons = []
+  const seen3 = new Set()
+  const render3 = (node, depth = 0) => {
+    if (node === null || node === undefined || typeof node !== 'object') return
+    if (depth > 40) return
+    if (Array.isArray(node)) { for (const c of node) render3(c, depth); return }
+    if (typeof node.type === 'function') {
+      if (seen3.has(node.type)) return
+      seen3.add(node.type)
+      render3(node.type(node.props), depth + 1)
+      return
+    }
+    if (node.type === 'button' && typeof node.children?.[0] === 'string') updButtons.push(node.children[0])
+    for (const c of node.children ?? []) render3(c, depth)
+  }
+  render3(updTree)
+  ok(updButtons.some((b) => b.includes('检查更新')), `更新页签有「检查更新」按钮（${updButtons.join(' / ')}）`)
+  // 更新页签面向整个 profile，不是某个会话：不该出现会话工具条上的动作。
+  ok(!updButtons.some((b) => b.includes('一键重试')), '更新页签不套用会话工具条')
+
   console.log(`\n${pass} passed, ${fail} failed`)
   if (fail > 0) process.exit(1)
 }
