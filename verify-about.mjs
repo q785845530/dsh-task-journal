@@ -289,6 +289,19 @@ const main = async () => {
   ok(g2.reload !== null && g2.reload.reloadCount === 0, '带上热重载状态')
   ok(g2.profiles.active === 'web', '显式给了 profile 就用它')
 
+  // 镜像仓库（Gitee 之类）：从 package.json 的 mirrors 字段读出来，
+  // 并据此多给一条「从镜像装」的命令 —— 国内网络通常快得多。
+  {
+    const g4 = await gather(noNet)
+    ok(Array.isArray(g4.self.mirrors), '带出镜像仓库列表')
+    ok(g4.self.mirrors.length >= 1, `声明了至少一个镜像仓库（实际 ${g4.self.mirrors.length}）`)
+    ok(g4.self.mirrors[0].host === 'gitee', '镜像仓库是 gitee')
+    ok(g4.self.mirrors[0].url.startsWith('https://'), '镜像仓库是可点的 https 地址')
+    ok(typeof g4.commands.installFromMirror === 'string', '给出「从镜像装」的命令')
+    ok(g4.commands.installFromMirror.includes('gitee.com'), '该命令指向 Gitee')
+    ok(g4.commands.installFromMirrorHost === 'gitee', '标出镜像来源名')
+  }
+
   // manager 抛异常也不能崩
   const g3 = await gather({
     ...noNet,

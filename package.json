@@ -54,5 +54,8 @@
   "homepage": "https://github.com/q785845530/dsh-task-journal",
   "bugs": {
     "url": "https://github.com/q785845530/dsh-task-journal/issues"
+  },
+  "mirrors": {
+    "gitee": "https://gitee.com/wasen/dsh-task-journal"
   }
 }

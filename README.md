@@ -766,6 +766,26 @@ dsh plugin --profile web remove dsh-task-journal
 
 所以界面**不写**「等它自动热重载」这种话 —— 那是猜测，会让人白等。改成按证据说：「本进程内插件模块只加载过 N 次，没发生过热重载 —— 需要重启网关才生效」。
 
+## 仓库与镜像
+
+主仓库在 GitHub，另有一个 Gitee 镜像（国内访问通常快得多）：
+
+| 位置 | 地址 |
+|---|---|
+| GitHub（主） | https://github.com/q785845530/dsh-task-journal |
+| Gitee（镜像） | https://gitee.com/wasen/dsh-task-journal |
+
+两边的提交历史、分支、标签保持一致。`package.json` 的 `mirrors` 字段声明了镜像仓库，「关于」页签据此多给一条安装命令：
+
+```bash
+# 国内从 Gitee 装（快）
+dsh plugin --profile web add https://gitee.com/wasen/dsh-task-journal
+```
+
+### 推送要推所有远端
+
+`push-all.sh` 会遍历仓库的**每个** remote 逐个推。只推 `origin` 会让镜像仓库悄悄落后 —— 这正是「推了但其实没同步」的典型情形，所以盘点阶段也会逐个远端算待推送数量。
+
 ## 自测
 
 ```bash
@@ -788,7 +808,7 @@ node verify-about.mjs      # 关于（仓库归一化、GitHub 降级、热重�
 node verify-client.mjs     # 浏览器半渲染（含「会话修复」页签）
 ```
 
-共 **935 项**。覆盖：自动落盘、注入上下文排除、追加语义、自定义目录、全部工具、子代理会话排除、
+共 **942 项**。覆盖：自动落盘、注入上下文排除、追加语义、自定义目录、全部工具、子代理会话排除、
 禁用开关、超长截断、工具名映射、模型参数记录、用量、未完成任务与错误码、导出、重试、
 CLI 全部子命令与错误处理、子智能体分类与标签、运行期自动发现、HOME 遮蔽、凭据遮蔽、
 归档凭据擦除（帧级最小性、幂等、头部命中）、
