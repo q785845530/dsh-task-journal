@@ -22,6 +22,10 @@ import {
   restore, probe, probeAll, probeCustom,
 } from './lib/mirrors.js'
 import { apply as applyPlugin } from './lib/index.js'
+import {
+  state as privState, authorize as privAuthorize, deauthorize as privDeauthorize,
+  writeAsRoot, runAsRoot, preflight as privPreflight, sudoAvailable,
+} from './lib/privileged.js'
 
 let pass = 0
 let fail = 0
@@ -137,13 +141,28 @@ const main = async () => {
   const rUnknown = await apply('nope', 'https://x/')
   ok(rUnknown.ok === false && rUnknown.reason.includes('没有这一项'), '未知 id 被拒')
 
+  // Docker：现在能改，但**只出计划**，落盘要提权。
   const rDocker = await apply('docker', ['https://x/'])
-  ok(rDocker.ok === false && rDocker.needsRoot === true, 'Docker 需 root：拒绝自动改')
-  ok(rDocker.reason.includes('root'), '说明要 root')
-  ok(rDocker.file === '/etc/docker/daemon.json', '带出要改的文件')
+  ok(rDocker.ok === false && rDocker.reason.includes('字符串'), '数组地址被拒（不隐式转字符串）')
+  const DockerBefore = await readFile('/etc/docker/daemon.json', 'utf8').catch(() => null)
+  const rDocker2 = await apply('docker', 'https://docker.m.daocloud.io')
+  ok(rDocker2.ok === true && rDocker2.needsPrivilege === true, 'Docker 出计划并标记需提权')
+  ok(rDocker2.file === '/etc/docker/daemon.json', '带出要改的文件')
+  ok(typeof rDocker2.content === 'string' && rDocker2.content.includes('daocloud'), '算出了新内容')
+  // 关键：这里**没有**写真实文件。要比字节，不能用子串 ——
+  // 该文件本来就含 "daocloud.io"，子串匹配会误判（踩过）。
+  const dockerOnDisk = await readFile('/etc/docker/daemon.json', 'utf8').catch(() => null)
+  ok(dockerOnDisk === DockerBefore, '只算不写：真实 daemon.json 字节未变')
+  const rDocker3 = await apply('docker', null)
+  ok(rDocker3.ok === false && rDocker3.reason.includes('不能清除'), 'Docker 不能清除镜像')
 
-  const rApt = await apply('apt', 'https://x/')
-  ok(rApt.ok === false, 'APT 拒绝自动改（格式风险高）')
+  const rApt = await apply('apt', 'https://mirrors.ustc.edu.cn/debian/')
+  ok(rApt.ok === true && rApt.needsPrivilege === true, 'APT 出计划并标记需提权')
+  ok(rApt.content.includes('mirrors.ustc.edu.cn'), 'APT 计划里含新镜像')
+  // 关键：第三方仓库（docker / vscode / chrome）不该出现在改动里
+  ok(!rApt.content.includes('download.docker.com'), 'APT 计划不动第三方仓库')
+  const rApt2 = await apply('apt', 'https://evil.example/debian/')
+  ok(rApt2.ok === false, 'APT 拒绝清单外的地址')
 
   const rGithub = await apply('github', 'https://x/')
   ok(rGithub.ok === false && rGithub.reason.includes('前缀'), 'GitHub 只给地址不改配置')
@@ -177,7 +196,9 @@ const main = async () => {
   ok(status.every((s) => typeof s.id === 'string' && typeof s.file === 'string'), '每条都有 id 与文件')
   ok(status.every((s) => typeof s.canApply === 'boolean'), '每条都标明能否自动改')
   const stDocker = status.find((s) => s.id === 'docker')
-  ok(stDocker.canApply === false && stDocker.needsRoot === true, 'Docker 标为不可自动改')
+  ok(stDocker.canApply === false && stDocker.requiresAuth === true, 'Docker 标为需提权')
+  const stApt = status.find((s) => s.id === 'apt')
+  ok(stApt.requiresAuth === true, 'APT 标为需提权')
   const stGithub = status.find((s) => s.id === 'github')
   ok(stGithub.canApply === false && stGithub.readOnly === true, 'GitHub 标为只读')
   // 不存在的文件也不能炸
@@ -275,13 +296,22 @@ const main = async () => {
     const noId = await call(handler, 'POST', '/api/dsh-journal/mirrors/apply', { confirm: true })
     ok(noId.status === 400, '缺 id → 400')
 
-    const rootRefuse = await call(handler, 'POST', '/api/dsh-journal/mirrors/apply', {
-      // url 用字符串：Docker 该项要 root，会在格式校验之后被拦。
-      id: 'docker', url: 'https://x/', confirm: true,
+    // Docker 现在走提权通道：普通接口只**算出**新内容，不落盘。
+    const rootPlan = await call(handler, 'POST', '/api/dsh-journal/mirrors/apply', {
+      id: 'docker', url: 'https://docker.m.daocloud.io', confirm: true,
     })
-    ok(rootRefuse.status === 400, 'Docker 需 root → 400')
-    ok(rootRefuse.body.reason.includes('root'), '响应里说明需要 root')
-    ok(rootRefuse.body.file === '/etc/docker/daemon.json', '响应里带出要改的文件')
+    ok(rootPlan.status === 200, 'Docker 普通接口返回计划（200）')
+    ok(rootPlan.body.needsPrivilege === true, '标明需要提权')
+    ok(rootPlan.body.file === '/etc/docker/daemon.json', '带出要改的文件')
+    // 只算不写：真实文件不该被这个调用改动
+    const { readFile } = await import('node:fs/promises')
+    const realDocker = await readFile('/etc/docker/daemon.json', 'utf8').catch(() => '')
+    ok(realDocker.includes('registry-mirrors'), '普通接口没有写真实文件（仍需 root）')
+
+    const rootBad = await call(handler, 'POST', '/api/dsh-journal/mirrors/apply', {
+      id: 'docker', url: 'javascript:alert(1)', confirm: true,
+    })
+    ok(rootBad.status === 400, '提权项的非法地址也 → 400')
 
     const probeApi = await call(handler, 'POST', '/api/dsh-journal/mirrors/probe', { id: 'npm' })
     ok(probeApi.status === 200 && probeApi.body.results.length > 0, '测速接口返回结果')
@@ -307,6 +337,201 @@ const main = async () => {
     ok(tBad.ok === false, '工具没有 apply 动作（换源必须人来点）')
   } finally {
     globalThis.fetch = realFetch2
+  }
+
+  // ————— 十一、提权：密码只在内存 —————
+  console.log('\n十一、提权通道')
+  const PW = 'SENTINEL_PW_must_never_leak_9f3a'
+  // 假执行器：记录每次调用的 argv 与 stdin，绝不真跑 sudo。
+  const mkExec = (behaviour) => {
+    const calls = []
+    const exec = async (cmd, args, opts = {}) => {
+      calls.push({ cmd, args: args.slice(), stdin: opts.stdin ?? null, opts })
+      return typeof behaviour === 'function' ? behaviour(cmd, args, opts, calls.length) : behaviour
+    }
+    return { exec, calls }
+  }
+
+  await privDeauthorize(undefined)
+  ok(privState().authorized === false, '初始未授权')
+  ok(JSON.stringify(privState()).includes('password') === false, '状态里没有 password 字段')
+
+  // 空密码
+  {
+    const { exec } = mkExec({ ok: true, stdout: '', stderr: '' })
+    const r = await privAuthorize('', exec)
+    ok(r.ok === false && r.reason.includes('空'), '空密码被拒')
+  }
+
+  // 密码错误：返回值里绝不能含密码
+  {
+    const { exec } = mkExec({ ok: false, reason: 'sudo failed', stderr: '对不起，请重试。\nsudo: 1 次错误密码尝试' })
+    const r = await privAuthorize(PW, exec)
+    ok(r.ok === false, '密码错误时拒绝授权')
+    ok(r.reason === '密码不正确', `中文 sudo 输出也能认出密码错（实际「${r.reason}」）`)
+    ok(JSON.stringify(r).includes(PW) === false, '拒绝响应里不含密码')
+    ok(privState().authorized === false, '失败后仍是未授权')
+  }
+
+  // 成功授权
+  {
+    const { exec, calls } = mkExec({ ok: true, stdout: '', stderr: '' })
+    const r = await privAuthorize(PW, exec)
+    ok(r.ok === true && r.authorized === true, '授权成功')
+    ok(JSON.stringify(r).includes(PW) === false, '成功响应里不含密码')
+    ok(JSON.stringify(privState()).includes(PW) === false, '状态里不含密码')
+    // 关键：密码走 stdin，绝不能出现在 argv 里（argv 会被 ps 看到）
+    ok(calls.length === 1, '校验只跑一次 sudo')
+    ok(calls[0].cmd === 'sudo', '用的是 sudo')
+    ok(calls[0].args.includes('-S'), '用 -S 从 stdin 读密码')
+    ok(calls[0].args.includes('-v'), '-v 只刷新时间戳（不改系统）')
+    ok(calls[0].args.some((a) => a.includes(PW)) === false, '**argv 里没有密码**')
+    ok(String(calls[0].stdin).includes(PW), '密码经 stdin 传入')
+  }
+
+  // 过期：闲置超时
+  {
+    const st = privState()
+    ok(st.authorized === true, '授权后状态为已授权')
+    ok(typeof st.expiresInMs === 'number' && st.expiresInMs > 0, '带出剩余可用时间')
+    // 超过闲置窗口
+    const expired = privState(Date.now() + 6 * 60 * 1000)
+    ok(expired.authorized === false && expired.expired === true, '闲置超时后自动失效')
+  }
+
+  // 重新授权后测 writeAsRoot / runAsRoot
+  {
+    const { exec, calls } = mkExec({ ok: true, stdout: '', stderr: '' })
+    await privAuthorize(PW, exec)
+    calls.length = 0
+
+    // runAsRoot：命令名带斜杠要拒
+    const bad = await runAsRoot('/bin/sh', ['-c', 'x'], exec)
+    ok(bad.ok === false, '命令名带斜杠被拒（防路径注入）')
+    ok(calls.length === 0, '被拒时没有执行命令')
+
+    calls.length = 0
+    const sys = await runAsRoot('systemctl', ['restart', 'docker'], exec)
+    ok(sys.ok === true, 'runAsRoot 可以跑裸命令名')
+    ok(calls[0].args.some((a) => a.includes(PW)) === false, 'runAsRoot 的 argv 也没有密码')
+
+    calls.length = 0
+    const w = await writeAsRoot('/etc/docker/daemon.json', '{"a":1}', exec)
+    ok(w.ok === true, 'writeAsRoot 成功')
+    ok(calls[0].cmd === 'sudo' && calls[0].args.includes('install'), '用 install 落盘')
+    ok(calls[0].args.some((a) => a.includes(PW)) === false, 'install 的 argv 没有密码')
+    ok(String(calls[0].stdin).startsWith(PW), '密码在 stdin 开头')
+    // 目标路径必须在 argv 里（这是正常的），但内容不该在
+    ok(calls[0].args.includes('/etc/docker/daemon.json'), '目标路径作为参数传入')
+    ok(calls[0].args.some((a) => a.includes('{"a":1}')) === false, '**文件内容不经过 argv**')
+
+    // 非绝对路径拒绝
+    const rel = await writeAsRoot('etc/x', 'x', exec)
+    ok(rel.ok === false && rel.reason.includes('绝对路径'), '非绝对路径被拒')
+
+    // 密码失效（sudo 报错）时要如实说
+    const { exec: badExec } = mkExec({ ok: false, reason: 'sudo failed', stderr: '对不起，请重试。' })
+    await privAuthorize(PW, mkExec({ ok: true }).exec)
+    const stale = await writeAsRoot('/etc/x', 'y', badExec)
+    ok(stale.ok === false && stale.reason.includes('重新授权'), '密码失效时提示重新授权')
+  }
+
+  // 未授权时不能写
+  {
+    await privDeauthorize(undefined)
+    const { exec, calls } = mkExec({ ok: true })
+    const w = await writeAsRoot('/etc/x', 'y', exec)
+    ok(w.ok === false && w.needsAuth === true, '未授权时不写，并标出 needsAuth')
+    ok(calls.length === 0, '未授权时一条命令都不跑')
+    const r = await runAsRoot('systemctl', ['restart', 'docker'], exec)
+    ok(r.ok === false && r.needsAuth === true, '未授权时 runAsRoot 也拒绝')
+  }
+
+  // 取消授权会顺手清掉 sudo 的时间戳缓存
+  {
+    const { exec, calls } = mkExec({ ok: true })
+    await privAuthorize(PW, exec)
+    calls.length = 0
+    const d = await privDeauthorize(exec)
+    ok(d.ok === true && d.had === true, '取消授权（此前有授权）')
+    ok(privState().authorized === false, '取消后未授权')
+    ok(calls[0].args.includes('-k'), '顺手 sudo -k 让时间戳缓存失效')
+  }
+
+  // sudoAvailable / preflight
+  {
+    const { exec } = mkExec({ ok: true, stdout: 'Sudo version 1.9', stderr: '' })
+    ok(await sudoAvailable(exec) === true, 'sudoAvailable 认得 sudo')
+    const { exec: noSudo } = mkExec({ ok: false, reason: '系统里没有 sudo 命令' })
+    ok(await sudoAvailable(noSudo) === false, '没有 sudo 时返回 false')
+
+    const { exec: dockerOk } = mkExec((cmd, args) => {
+      if (cmd === 'sudo') return { ok: true, stdout: '', stderr: '' }
+      if (cmd === 'docker') return { ok: true, stdout: '27.0.0', stderr: '' }
+      if (cmd === 'systemctl') return { ok: true, stdout: 'active', stderr: '' }
+      return { ok: false, reason: 'x' }
+    })
+    const pf = await privPreflight('docker', dockerOk)
+    ok(pf.ok === true, 'Docker 预检通过')
+    ok(pf.checks.some((c) => c.id === 'docker-running'), '检查守护进程')
+    ok(pf.checks.some((c) => c.id === 'docker-unit'), '检查服务状态（改完要重启）')
+
+    const { exec: dockerDown } = mkExec((cmd) => cmd === 'docker'
+      ? { ok: false, reason: '连不上' }
+      : { ok: true, stdout: 'active', stderr: '' })
+    const pf2 = await privPreflight('docker', dockerDown)
+    ok(pf2.ok === false, 'Docker 不可用时预检不通过')
+  }
+
+  // ————— 十二、提权接口 —————
+  console.log('\n十二、提权接口')
+  {
+    const realFetch3 = globalThis.fetch
+    globalThis.fetch = async () => ({ status: 200, ok: true })
+    try {
+      await privDeauthorize(undefined)
+      const ctx = fakeApiCtx()
+      applyPlugin(ctx, { enabled: true, dir: join(tmpdir(), 'dtj-priv-plugin') })
+      await new Promise((r) => setTimeout(r, 80))
+      const handler = ctx._handler()
+
+      const st = await call(handler, 'GET', '/api/dsh-journal/mirrors/auth')
+      ok(st.status === 200 && st.body.authorized === false, 'GET /mirrors/auth 报未授权')
+
+      const noPw = await call(handler, 'POST', '/api/dsh-journal/mirrors/authorize', {})
+      ok(noPw.status === 401, '空密码 → 401')
+      ok(JSON.stringify(noPw.body).includes('password') === false, '响应里没有 password 字段')
+
+      // 真密码不会出现在这个测试里 —— 用错误密码验证拒绝路径
+      const wrong = await call(handler, 'POST', '/api/dsh-journal/mirrors/authorize', { password: 'not-the-real-one' })
+      ok(wrong.status === 401, '错密码 → 401')
+      ok(JSON.stringify(wrong.body).includes('not-the-real-one') === false, '响应不回显密码')
+
+      // 未授权时提权写入必须被拒
+      const applyNoAuth = await call(handler, 'POST', '/api/dsh-journal/mirrors/apply-root', {
+        id: 'apt', url: 'https://mirrors.ustc.edu.cn/debian/', confirm: true,
+      })
+      ok(applyNoAuth.status === 401 && applyNoAuth.body.needsAuth === true, '未授权时 apply-root → 401')
+
+      const applyNoConfirm = await call(handler, 'POST', '/api/dsh-journal/mirrors/apply-root', { id: 'apt' })
+      ok(applyNoConfirm.status === 400, '缺 confirm → 400')
+
+      const pre = await call(handler, 'GET', '/api/dsh-journal/mirrors/preflight?id=apt')
+      ok(pre.status === 200 && Array.isArray(pre.body.checks), 'preflight 返回检查项')
+
+      const preNoId = await call(handler, 'GET', '/api/dsh-journal/mirrors/preflight')
+      ok(preNoId.status === 400, 'preflight 缺 id → 400')
+
+      const de = await call(handler, 'POST', '/api/dsh-journal/mirrors/deauthorize')
+      ok(de.status === 200 && de.body.ok === true, 'deauthorize 可用')
+
+      // 工具里不该有提权动作
+      const tool = ctx._tools.find((t) => t.name === 'journal_mirrors')
+      ok(tool !== undefined, '工具仍在')
+      ok(JSON.stringify(tool.parameters ?? {}).includes('authorize') === false, '**工具没有提权动作**（密码只能人来输）')
+    } finally {
+      globalThis.fetch = realFetch3
+    }
   }
 
   console.log(`\n结果：${pass} passed / ${fail} failed`)
