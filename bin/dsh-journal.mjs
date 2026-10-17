@@ -17,13 +17,13 @@
  * 每个写盘命令结束时打印一行醒目提示（含文件路径与条数），便于确认结果。
  * 输出里的本机 HOME 前缀默认遮蔽成 `~`（--no-redact 关闭）。
  */
-import { readFile, readdir, stat, mkdir, writeFile, copyFile } from 'node:fs/promises'
+import { readFile, readdir, stat, mkdir, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import {
   builtinEntries, groupByCategory, normalizeCategory, categoryIds,
-  writeCatalog, archiveSources, subagentDir, redactHome,
+  writeCatalog, archiveSources, subagentDir, redactHome, redactSecrets,
 } from '../lib/subagent-catalog.js'
 
 const USAGE = `dsh-journal — 任务日志命令行
@@ -230,14 +230,16 @@ const main = async () => {
 
       const order = ['journal', 'tasks', 'failures', 'models']
       const parts = []
+      // 读侧也过遮蔽：老日志可能还带着修复前写下的凭据，导出别把它再打包一份。
+      const readClean = async (p) => redactSecrets(await readFile(p, 'utf8'))
       for (const k of order) {
         const p = r.target.files[k]
         if (p === undefined || !existsSync(p)) continue
-        parts.push(`\n\n<!-- ===== ${k} ===== -->\n\n`, await readFile(p, 'utf8'))
+        parts.push(`\n\n<!-- ===== ${k} ===== -->\n\n`, await readClean(p))
       }
       const ev = r.target.files.events
       if (ev !== undefined && existsSync(ev)) {
-        parts.push(`\n\n<!-- ===== events(jsonl) ===== -->\n\n`, '```jsonl\n', await readFile(ev, 'utf8'), '\n```\n')
+        parts.push(`\n\n<!-- ===== events(jsonl) ===== -->\n\n`, '```jsonl\n', await readClean(ev), '\n```\n')
       }
       const summaryPath = join(outDir, `export-${sid}-${day}.md`)
       await writeFile(summaryPath, parts.join(''), 'utf8')
@@ -249,7 +251,7 @@ const main = async () => {
           if (p === undefined || !existsSync(p)) continue
           const ext = p.endsWith('.jsonl') ? '.jsonl' : '.md'
           const t = join(outDir, `${k}-${sid}-${day}${ext}`)
-          await copyFile(p, t)
+          await writeFile(t, await readClean(p), 'utf8')
           files.push(t)
         }
       }

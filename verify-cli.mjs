@@ -6,7 +6,7 @@
  *
  * 造一份假的 .dsh-journal/ 数据，逐个跑子命令，断言输出与退出码。
  */
-import { mkdtemp, mkdir, writeFile, rm, readdir } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, rm, readdir, readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
@@ -97,9 +97,31 @@ const main = async () => {
   ok(f2.some((x) => x.includes('failures')), 'all 模式导出 failures')
   ok(e2.out.includes('导出完成'), '有完成提示')
 
+  // —— 导出的读侧脱敏 ——
+  // 真实事故回归：老日志里写着明文凭据，导出会把它原样再打包一份新的。
+  console.log('\n用例 6.5：导出时遮蔽历史凭据')
+  const leaked = 'ghp' + '_' + 'e'.repeat(36)
+  await writeFile(join(base, 'journal-dirty-1.md'),
+    `# 任务日志\n\n- 会话：\`dirty-1\`\n\n---\n## 任务 1｜2026-01-01 00:00:00\n\n我的 token 是 ${leaked} ，帮我配\n`, 'utf8')
+  const e3 = run(['export', '--cwd', root, '--session', 'dirty-1', '--format', 'all',
+    '--dir', join(root, 'out3')])
+  ok(e3.code === 0, '导出脏会话退出码 0')
+  const out3 = join(root, 'out3')
+  const f3 = existsSync(out3) ? await readdir(out3) : []
+  const summary3 = f3.find((x) => x.startsWith('export-') && x.endsWith('.md')) ?? ''
+  const sumBody = summary3 !== '' ? await readFile(join(out3, summary3), 'utf8') : ''
+  ok(!sumBody.includes(leaked), '汇总文件里没有明文凭据')
+  ok(sumBody.includes('<redacted:github-pat>'), '汇总文件里留下遮蔽标记')
+  ok(sumBody.includes('帮我配'), '汇总文件保留了其余原文')
+  const copy3 = f3.find((x) => x.startsWith('journal-') && x.endsWith('.md')) ?? ''
+  const copyBody = copy3 !== '' ? await readFile(join(out3, copy3), 'utf8') : ''
+  ok(copy3 !== '', 'all 模式导出了单文件副本')
+  ok(!copyBody.includes(leaked), '单文件副本里也没有明文凭据')
+
   // —— retry ——
   console.log('\n用例 7：retry')
-  const r = run(['retry', '--cwd', root])
+  // 显式指定会话：不指定时按最新日志取，会被后面新增的样本抢走。
+  const r = run(['retry', '--cwd', root, '--session', sid])
   ok(r.code === 0, '退出码 0')
   ok(r.out.includes('journal_retry'), '给出工具重试指引')
   ok(r.out.includes('继续'), '给出「继续」指引')

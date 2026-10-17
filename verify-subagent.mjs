@@ -141,6 +141,35 @@ const main = async () => {
   const deep = CAT.redactDeep({ a: '/home/someuser/x', b: ['/home/someuser/y'], c: 1, d: null }, home)
   ok(deep.a === '~/x' && deep.b[0] === '~/y' && deep.c === 1 && deep.d === null, '递归遮蔽且不破坏非字符串')
 
+  // ————— 三点五、凭据遮蔽 —————
+  console.log('\n三点五、凭据遮蔽')
+  // 测试用假凭据：拼出来，免得这段源码本身被扫描器当成真凭据。
+  const fakePat = 'ghp' + '_' + 'a'.repeat(36)
+  const fakeFine = 'github_pat' + '_' + 'b'.repeat(30)
+  const fakeAws = 'AKIA' + 'Q'.repeat(16)
+  const fakeOpenAi = 'sk-' + 'c'.repeat(32)
+  const scrubbed = CAT.redactSecrets(`token=${fakePat} end`)
+  ok(!scrubbed.includes(fakePat), '经典 PAT 被遮蔽')
+  ok(scrubbed.includes('<redacted:github-pat>'), '遮蔽处留下标签')
+  ok(scrubbed.startsWith('token=') && scrubbed.endsWith(' end'), '遮蔽只换密钥，不动周边文本')
+  ok(!CAT.redactSecrets(fakeFine).includes(fakeFine), '细粒度 PAT 被遮蔽')
+  ok(!CAT.redactSecrets(fakeAws).includes(fakeAws), 'AWS key 被遮蔽')
+  ok(!CAT.redactSecrets(fakeOpenAi).includes(fakeOpenAi), 'sk- 风格 key 被遮蔽')
+  const pem = `-----BEGIN ${'RSA '}PRIVATE KEY-----\nMIIabc\n-----END ${'RSA '}PRIVATE KEY-----`
+  const pemOut = CAT.redactSecrets(pem)
+  ok(!pemOut.includes('MIIabc'), 'PEM 私钥正文被整块遮蔽')
+  const plainHex = '49151d784b5f0a1b2c3d4e5f6a7b8c9d0e1f2a3b'
+  ok(CAT.redactSecrets(`commit ${plainHex}`) === `commit ${plainHex}`,
+    '无前缀十六进制串不动（不误伤提交哈希）')
+  ok(CAT.redactSecrets('') === '' && CAT.redactSecrets(null) === '', '空输入安全')
+  const twice = CAT.redactSecrets(`a=${fakePat} b=${fakePat}`)
+  ok(twice === 'a=<redacted:github-pat> b=<redacted:github-pat>', '同段文本里的多个密钥都被遮蔽')
+  ok(CAT.redactSecrets(twice) === twice, '遮蔽幂等，重复过闸不叠加')
+  const deepScrub = CAT.redactSecretsDeep({ k: fakePat, arr: [fakeAws], n: 7, nil: null })
+  ok(deepScrub.k === '<redacted:github-pat>' && deepScrub.arr[0] === '<redacted:aws-key>',
+    '递归遮蔽对象/数组')
+  ok(deepScrub.n === 7 && deepScrub.nil === null, '递归遮蔽不破坏非字符串')
+
   // ————— 四、归档产物 —————
   console.log('\n四、归档产物')
   const root = await mkdtemp(join(tmpdir(), 'dtj-sub-'))
@@ -340,6 +369,42 @@ const main = async () => {
   await settle()
   const subText2 = await readFile(subPath, 'utf8')
   ok(subText2.includes('按规格调用'), 'subagent_run 也写进使用记录')
+
+  // ————— 八点五、写入即脱敏（端到端） —————
+  console.log('\n八点五、写入即脱敏')
+  // 这是真实事故的回归：用户在对话里贴了一个 PAT，日志把它原样写进了
+  // journal/tasks/events 三类文件，导出还再打包一份。凭据绝不能落盘。
+  const ctxSec = fakeCtx()
+  apply(ctxSec, { enabled: true, notify: false, notifyOnFailure: false })
+  const sSec = fakeSession(root, 'sg-session-secret')
+  const leaked = 'ghp' + '_' + 'd'.repeat(36)
+  ctxSec._emit(sSec, userMsg(`我的 token 是 ${leaked} ，帮我配一下`))
+  await settle()
+  const secDir = join(root, '.dsh-journal')
+  const secFiles = ['journal-sg-session-secret.md', 'tasks-sg-session-secret.md',
+    'events-sg-session-secret.jsonl']
+  for (const f of secFiles) {
+    const p = join(secDir, f)
+    const body = existsSync(p) ? await readFile(p, 'utf8') : ''
+    ok(body.includes('<redacted:github-pat>'), `${f} 里留下了遮蔽标记`)
+    ok(!body.includes(leaked), `${f} 里没有明文凭据`)
+    ok(body.includes('帮我配一下'), `${f} 里保留其余原文`)
+  }
+  // 工具输出也走同一条路：失败原因、stdout 里同样可能带密钥。
+  ctxSec._emit(sSec, {
+    type: 'tool/result', seq: 3, time: Date.now(),
+    data: { message: { content: [{ type: 'text', text: `export TOKEN=${leaked}` }], isError: true, source: { name: 'bash' } } },
+  })
+  await settle()
+  const jlSec = await readFile(join(secDir, 'events-sg-session-secret.jsonl'), 'utf8')
+  ok(!jlSec.includes(leaked), '工具输出里的凭据也没落盘')
+  ok(jlSec.includes('<redacted:github-pat>'), '工具输出也留下遮蔽标记')
+  // 导出是二次泄漏点：老文件没洗干净时，导出等于重新打包一份。
+  const expTool = ctxSec._tools.find((t) => t.name === 'journal_export')
+  const expRes = await expTool.execute({}, { agent: { session: sSec }, signal: undefined })
+  const expPath = expRes.files[0]
+  const expBody = await readFile(expPath, 'utf8')
+  ok(!expBody.includes(leaked), '导出文件里没有明文凭据')
 
   // ————— 九、HTTP 接口 —————
   console.log('\n九、HTTP 接口')

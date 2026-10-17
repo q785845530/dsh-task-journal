@@ -7,7 +7,7 @@
  *   node verify.mjs
  */
 import { mkdtemp, readFile, rm, readdir } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { apply } from './lib/index.js'
@@ -314,6 +314,23 @@ const main = async () => {
     ok(r1.ok === false, '无活跃 agent 时明确返回失败')
     ok(typeof r1.message === 'string' && r1.message.includes('继续'), '失败信息给出可行的替代做法')
   }
+
+  // —— 用例 15：落盘文件的权限与自忽略 ——
+  // 日志目录里是会话原文。它必须 0600（同机其它用户读不到），
+  // 并且自带 `.gitignore`（`*`），这样落在任何仓库里都不会被 add 走。
+  console.log('\n用例 15：日志目录权限与自忽略')
+  const secDir = join(dir, 'fail')
+  const ignoreP = join(secDir, '.gitignore')
+  ok(existsSync(ignoreP), '日志目录里写了 .gitignore')
+  const ignoreTxt = existsSync(ignoreP) ? await readFile(ignoreP, 'utf8') : ''
+  ok(ignoreTxt.trim() === '*', '.gitignore 内容是 *（整个目录自忽略）')
+  const modeOf = (p) => (statSync(p).mode & 0o777).toString(8)
+  const secFiles = existsSync(secDir) ? await readdir(secDir) : []
+  const logFiles = secFiles.filter((f) => f.endsWith('.md') || f.endsWith('.jsonl'))
+  ok(logFiles.length > 0, `日志目录里有 ${logFiles.length} 个日志文件`)
+  const loose = logFiles.filter((f) => modeOf(join(secDir, f)) !== '600')
+  ok(loose.length === 0, `日志文件都是 0600（例外：${loose.join(',') || '无'}）`)
+  ok(modeOf(ignoreP) === '600', '.gitignore 也是 0600')
 
   await rm(dir, { recursive: true, force: true })
   console.log(`\n结果：${pass} passed / ${fail} failed`)
