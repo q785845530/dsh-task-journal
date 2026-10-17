@@ -19,7 +19,7 @@ import { join } from 'node:path'
 
 import {
   CATALOG, entryById, readValue, isMirror, rewrite, backup, apply, listStatus,
-  restore, probe, probeAll, probeCustom,
+  restore, probe, probeAll, probeCustom, validateContent, validateTarget,
 } from './lib/mirrors.js'
 import { apply as applyPlugin } from './lib/index.js'
 import {
@@ -142,8 +142,12 @@ const main = async () => {
   ok(rUnknown.ok === false && rUnknown.reason.includes('没有这一项'), '未知 id 被拒')
 
   // Docker：现在能改，但**只出计划**，落盘要提权。
-  const rDocker = await apply('docker', ['https://x/'])
-  ok(rDocker.ok === false && rDocker.reason.includes('字符串'), '数组地址被拒（不隐式转字符串）')
+  // 数组对 Docker 是**正确**形式（registry-mirrors 就是数组），不再拒绝。
+  const rDockerArr = await apply('docker', ['https://x/'])
+  ok(rDockerArr.ok === true && JSON.parse(rDockerArr.content)['registry-mirrors'][0] === 'https://x/', '数组是 Docker 的正确形式')
+  // 非列表项仍不接受数组（类型不匹配要挡住）
+  const rNpmArr = await apply('npm', ['https://x/'])
+  ok(rNpmArr.ok === false, '非列表项不接受数组')
   const DockerBefore = await readFile('/etc/docker/daemon.json', 'utf8').catch(() => null)
   const rDocker2 = await apply('docker', 'https://docker.m.daocloud.io')
   ok(rDocker2.ok === true && rDocker2.needsPrivilege === true, 'Docker 出计划并标记需提权')
@@ -153,8 +157,10 @@ const main = async () => {
   // 该文件本来就含 "daocloud.io"，子串匹配会误判（踩过）。
   const dockerOnDisk = await readFile('/etc/docker/daemon.json', 'utf8').catch(() => null)
   ok(dockerOnDisk === DockerBefore, '只算不写：真实 daemon.json 字节未变')
+  // 清空 = 空数组（不用镜像，直连 Docker Hub），是合法状态
   const rDocker3 = await apply('docker', null)
-  ok(rDocker3.ok === false && rDocker3.reason.includes('不能清除'), 'Docker 不能清除镜像')
+  ok(rDocker3.ok === true, 'Docker 可以清空镜像')
+  ok(JSON.parse(rDocker3.content)['registry-mirrors'].length === 0, '清空写成空数组')
 
   const rApt = await apply('apt', 'https://mirrors.ustc.edu.cn/debian/')
   ok(rApt.ok === true && rApt.needsPrivilege === true, 'APT 出计划并标记需提权')
@@ -337,6 +343,85 @@ const main = async () => {
     ok(tBad.ok === false, '工具没有 apply 动作（换源必须人来点）')
   } finally {
     globalThis.fetch = realFetch2
+  }
+
+  // ————— 十点五、Docker 的 registry-mirrors 必须是数组 —————
+  console.log('\n十点五、Docker 必须是数组（曾写出字符串让 dockerd 起不来）')
+  const docker = entryById('docker')
+  ok(docker.listValue === true, 'Docker 标为列表值')
+  ok(docker.validate === 'dockerd', 'Docker 声明落盘前校验')
+  {
+    // 单地址也要包成数组。写成字符串会让 dockerd 启动失败：
+    //   invalid JSON: cannot unmarshal string into ... of type []string
+    const r = await apply('docker', 'https://docker.1ms.run')
+    const parsed = JSON.parse(r.content)
+    ok(Array.isArray(parsed['registry-mirrors']), '单地址写成**数组**而不是字符串')
+    ok(parsed['registry-mirrors'][0] === 'https://docker.1ms.run', '数组里是那个地址')
+  }
+  {
+    const r = await apply('docker', ['https://a.example/', 'https://b.example/'])
+    const parsed = JSON.parse(r.content)
+    ok(Array.isArray(parsed['registry-mirrors']) && parsed['registry-mirrors'].length === 2, '多地址写成数组')
+  }
+  {
+    // 清空 = 空数组（合法：表示不用镜像直连），不是删除字段
+    const r = await apply('docker', [])
+    const parsed = JSON.parse(r.content)
+    ok(Array.isArray(parsed['registry-mirrors']), '清空写成空数组')
+    ok(parsed['registry-mirrors'].length === 0, '空数组长度为 0')
+  }
+  {
+    // 列表里有一项非法就整批拒绝，不能只挑合法的写进去
+    const r = await apply('docker', ['https://ok.example/', 'javascript:alert(1)'])
+    ok(r.ok === false, '列表里混入非法项时整批拒绝')
+    ok(r.reason.includes('javascript'), '指出哪一项不合法')
+  }
+  {
+    // 历史遗留的字符串写法：读的时候要纠成数组形态
+    const legacy = '{"registry-mirrors":"https://old.example/"}'
+    const v = readValue(legacy, docker)
+    ok(Array.isArray(v), '读到历史遗留的字符串时纠成数组显示')
+    ok(v[0] === 'https://old.example/', '值本身不丢')
+    // 且下一次写入要修成数组
+    const fixed = JSON.parse(rewrite(legacy, docker, 'https://new.example/'))
+    ok(Array.isArray(fixed['registry-mirrors']), '再写一次就修成数组')
+  }
+  {
+    // 其它字段不能被碰掉
+    const withExtra = '{"registry-mirrors":["https://a/"],"log-driver":"json-file","data-root":"/var/lib/docker"}'
+    const out = JSON.parse(rewrite(withExtra, docker, ['https://b/']))
+    ok(out['log-driver'] === 'json-file', '保留 log-driver')
+    ok(out['data-root'] === '/var/lib/docker', '保留 data-root')
+  }
+  {
+    // validateContent：真跑 dockerd --validate（顺势证明生成的配置它收）
+    const { execFile } = await import('node:child_process')
+    const exec = (cmd, args) => new Promise((res) => {
+      execFile(cmd, args, { timeout: 20000, shell: false }, (e, out, err) =>
+        res(e ? { ok: false, reason: String(e.message), stderr: String(err) } : { ok: true, stdout: String(out), stderr: String(err) }))
+    })
+    const good = await validateContent(docker, JSON.stringify({ 'registry-mirrors': ['https://a.example/'] }), exec)
+    if (good.skipped === true) {
+      ok(false, 'docker 项不该跳过校验')
+    } else if (/ENOENT|没有 dockerd|not found/i.test(good.reason ?? '')) {
+      console.log('    （环境里没有 dockerd，跳过实测）')
+    } else {
+      ok(good.ok === true, '合法数组通过 dockerd --validate')
+      const bad = await validateContent(docker, JSON.stringify({ 'registry-mirrors': 'https://a.example/' }), exec)
+      ok(bad.ok === false, '字符串形式被 dockerd 拒绝')
+      ok(String(bad.reason).includes('dockerd'), '拒绝理由来自 dockerd')
+    }
+    const skip = await validateContent(entryById('npm'), 'x', exec)
+    ok(skip.ok === true && skip.skipped === true, '没声明校验的项直接跳过')
+  }
+  {
+    // validateTarget 对列表项的判定
+    ok(validateTarget(docker, []).ok === true, '空数组合法')
+    ok(validateTarget(docker, ['https://a/']).ok === true, '单元素数组合法')
+    ok(validateTarget(docker, ['https://a/', 'https://b/']).ok === true, '多元素数组合法')
+    ok(validateTarget(docker, ['https://a/', 'ftp://b/']).ok === false, '混入非 http(s) 被拒')
+    ok(validateTarget(docker, [null]).ok === false, '列表里有 null 被拒')
+    ok(validateTarget(docker, '') .ok === false, '空字符串被拒')
   }
 
   // ————— 十一、提权：密码只在内存 —————

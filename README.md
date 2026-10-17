@@ -682,6 +682,31 @@ Docker 的 `daemon.json` 与 APT 的 `sources.list` 在 `/etc` 下，只有 root
 
 **模型工具没有提权动作。** `journal_mirrors` 只有 `list` 与 `probe`。密码只能人在面板上输 —— 模型不代劳，也不会把密码写进会话记录。
 
+### Docker 的 registry-mirrors 必须是数组
+
+这是**踩过的坑**：Docker 的 schema 要求 `registry-mirrors` 是 `[]string`，写成字符串会让 dockerd **直接起不来** —— 所有容器一起挂。
+
+用 `dockerd --validate` 实测过：
+
+```
+{"registry-mirrors": ["https://x"]}   → configuration OK
+{"registry-mirrors": "https://x"}     → invalid JSON: cannot unmarshal string
+                                        into ... of type []string
+```
+
+所以这一项标了 `listValue`：写入时**永远**包成数组，传单个字符串也包；读的时候把历史遗留的字符串纠成数组形态显示，再写一次就修好。
+
+界面也支持一次填多个镜像（逗号或空格分隔），因为 Docker 会按顺序试。清空写成 `[]`（表示不用镜像直连），也是合法状态。
+
+### 落盘前的校验闸门
+
+Docker 这一项在写入前后各过一道 `dockerd --validate`：
+
+1. **写前**：把将要写入的内容放进临时文件问 dockerd 收不收。不收就**放弃**，一个字节都不动。
+2. **写后**：重新读回来再验一次，并且**在重启之前**验 —— 写入过程出问题（截断、编码）能立刻发现。
+
+没有这道闸门的话，「写错 + 重启」= 所有容器下线。`dockerd --validate` 不需要 root，这个闸门很便宜。
+
 ### APT 只改官方源
 
 `/etc/apt/sources.list` 里可能混着多个源，而 `sources.list.d/` 下是 docker / vscode / chrome 等**第三方仓库**。改写时只认**路径正好是 `/debian` 或 `/debian-security`** 的行：
@@ -763,7 +788,7 @@ node verify-about.mjs      # 关于（仓库归一化、GitHub 降级、热重�
 node verify-client.mjs     # 浏览器半渲染（含「会话修复」页签）
 ```
 
-共 **907 项**。覆盖：自动落盘、注入上下文排除、追加语义、自定义目录、全部工具、子代理会话排除、
+共 **935 项**。覆盖：自动落盘、注入上下文排除、追加语义、自定义目录、全部工具、子代理会话排除、
 禁用开关、超长截断、工具名映射、模型参数记录、用量、未完成任务与错误码、导出、重试、
 CLI 全部子命令与错误处理、子智能体分类与标签、运行期自动发现、HOME 遮蔽、凭据遮蔽、
 归档凭据擦除（帧级最小性、幂等、头部命中）、
@@ -781,7 +806,9 @@ CLI 全部子命令与错误处理、子智能体分类与标签、运行期自�
 备份与恢复、非法 JSON 拒绝改写、测速的超时与不可达分离、接口与工具；
 提权的：密码只走 stdin 不进 argv、文件内容不经过 argv、未授权一律不执行、
 授权过期、取消授权并清 sudo 缓存、地址校验（数组/伪协议/控制字符全拒）、
-APT 只改官方源不动第三方仓库、工具里没有提权动作；
+APT 只改官方源不动第三方仓库、工具里没有提权动作、
+Docker 的 registry-mirrors 必须是数组（含 dockerd --validate 实测）、
+历史遗留的字符串写法会被纠回数组、列表混入非法项整批拒绝；
 关于的：仓库地址归一化（SSH/HTTPS/git+/简写）、GitHub 降级不报错、
 限流不缓存而成功要缓存、token 只在有值时带上、
 热重载计数跨模块重载累计、「磁盘比进程新」判定、profile 从磁盘检测。
