@@ -20,10 +20,10 @@ import { mkdtemp, mkdir, writeFile, rm, readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { zstdCompressSync, constants } from 'node:zlib'
+import { zstdCompressSync, zstdDecompressSync, constants } from 'node:zlib'
 import {
   decodeSession, diagnoseBuffer, repairBuffer, repairFile, validateEvent,
-  classifyIssue, derivedMessageId, scanZstdFrames,
+  classifyIssue, derivedMessageId, scanZstdFrames, scrubBuffer,
 } from './lib/session-repair.js'
 import { apply } from './lib/index.js'
 
@@ -357,8 +357,60 @@ const main = async () => {
   const info = await call(handler, 'GET', '/api/dsh-journal/repair/nope')
   ok(info.status === 404, '未知修复接口 → 404')
 
-  // ————————————— 九、工具入口 —————————————
-  console.log('\n九、session_repair 工具')
+  // ————————————— 九、凭据擦除 —————————————
+  console.log('\n九、凭据擦除（scrubBuffer）')
+  const leaked = 'ghp' + '_' + 'f'.repeat(36)
+  const cleanId = 'clean-1'
+  // 三帧：一个干净事件、一个带凭据的事件、一个干净事件。
+  const scrubBuf = Buffer.concat([
+    frame(headerLine(cleanId, '/tmp/x')),
+    frame(`${JSON.stringify(goodUser(0, '普通任务'))}\n`),
+    frame(`${JSON.stringify(goodUser(1, `我的 token 是 ${leaked} ，帮我配`))}\n`),
+    frame(`${JSON.stringify(goodUser(2, '收尾'))}\n`),
+  ])
+  const sres = scrubBuffer(scrubBuf)
+  ok(sres.ok === true, '擦除成功')
+  ok(sres.changed === true, '报告有改动')
+  ok(sres.changedLines === 1, `只重写了含凭据的 1 行（实际 ${sres.changedLines}）`)
+  ok(sres.hits.length === 1 && sres.hits[0].seq === 1, '命中定位到 seq 1')
+  ok(sres.eventCount === 3, '事件数仍为 3')
+  const sdec = decodeSession(sres.output)
+  ok(sdec.failReason === null, '擦除后可正常解码')
+  ok(sdec.events.length === 3, '擦除后仍是 3 个事件')
+  // 帧序：0 是头，1/2/3 是 seq 0/1/2 的事件。凭据在 seq 1，即第 2 帧。
+  const sOutFrames = scanZstdFrames(sres.output).frames
+  const sText = zstdDecompressSync(sres.output.subarray(
+    sOutFrames[2].start, sOutFrames[2].end)).toString('utf8')
+  ok(!sText.includes(leaked), '第 2 帧里没有明文凭据')
+  ok(sText.includes('<redacted:github-pat>'), '第 2 帧留下遮蔽标记')
+  ok(JSON.parse(sText).data.content[0].text.includes('帮我配'), '其余原文保留')
+  // 帧级最小性：没含凭据的帧必须逐字节不变。
+  const sframes = scanZstdFrames(scrubBuf).frames
+  const sout = scanZstdFrames(sres.output).frames
+  const same = (a, b) => scrubBuf.subarray(a.start, a.end).equals(sres.output.subarray(b.start, b.end))
+  ok(same(sframes[0], sout[0]), '第 0 帧（头）逐字节未变')
+  ok(!same(sframes[2], sout[2]), '第 2 帧（含凭据）被重写')
+  ok(same(sframes[1], sout[1]) && same(sframes[3], sout[3]), '干净帧逐字节未变')
+  // 幂等：再擦一次不该有改动。
+  const sres2 = scrubBuffer(sres.output)
+  ok(sres2.ok === true && sres2.changed === false, '再擦一次无改动（幂等）')
+  // 干净文件不产出新字节。
+  const cleanBuf = Buffer.concat([
+    frame(headerLine('clean-2', '/tmp/x')),
+    frame(`${JSON.stringify(goodUser(0, '干净'))}\n`),
+  ])
+  const cres = scrubBuffer(cleanBuf)
+  ok(cres.ok === true && cres.changed === false && cres.output === null, '干净文件不产出新字节')
+  // 头部带凭据也要擦。
+  const headLeak = Buffer.concat([
+    frame(headerLine('clean-3', `/tmp/${leaked}`)),
+    frame(`${JSON.stringify(goodUser(0, 'x'))}\n`),
+  ])
+  const hres = scrubBuffer(headLeak)
+  ok(hres.ok === true && hres.changedFrames.includes(0), '头部帧里的凭据也被擦除')
+
+  // ————————————— 十、工具入口 —————————————
+  console.log('\n十、session_repair 工具')
   const tool = ctx._tools.find((t) => t.name === 'session_repair')
   const exec = { agent: { session: { id: 'x', header: { cwd: root } } } }
   const rScan = await tool.execute({ action: 'scan' }, exec)
