@@ -4,6 +4,36 @@
 
 它在会话事件流上工作：你下发的任务、助手的产出、工具的调用结果、每一轮用的模型与参数，都会被增量追加到当前会话工作目录下的 `.dsh-journal/`。轮次失败时会单独记下**未完成的任务与原因**，并可一键重试。委派给子智能体的每一次调用也会被记下来，并可按软件开发分类**浏览、归档、复用**。
 
+## 网页桥接页签
+
+设置页「任务日志」里还有第二个跨插件页签，汇总
+[dsh-webcode-bridge](https://www.npmjs.com/package/dsh-webcode-bridge) 的状态：
+
+| 卡片 | 显示什么 |
+|---|---|
+| 可用模型 | 模型总数 / 站点数，逐个列出（站点、模型 id、上下文、是否思考） |
+| 驱动与中继 | 驱动是否运行、登录态、当前站点、中继状态、在途请求、中继错误 |
+| 投递方式 | 附件投递 / 纯文本，阈值多少字符 |
+| 任务计划 | 可派发 / 等依赖 / 等资源 / 可重试，终止统计 |
+| 设置摘要 | 默认模型、思考模式、子智能体模式、发送间隔、账号数 |
+
+**实测**：17 个模型 / 10 家站点（DeepSeek、GLM×2、ChatGPT、Kimi×3、Qwen、
+Doubao×2、Grok、Claude、Gemini、Z.ai×3）。
+
+读的是 `/__webcode/{status,models,settings,attach-status}`。
+
+### 它自己的入口删不掉
+
+它注册了 `settings.section`（id `webcode`，label「网页桥接」），还有
+`conversation.composer.dock`、`sidebar.right.pane.tab`（三个）、
+`sidebar.panellist`（两个）等一堆槽位 —— 这些是它自己挂的，**插件作者之外的人
+挪不走**。所以设置页里会同时存在：
+
+- **「网页桥接」**（它自己的完整设置页）
+- **任务日志 → 网页桥接**（这个页签，只读汇总）
+
+两个不冲突，前者是操作入口，后者是状态总览。
+
 ## DeepSeek 网页版页签
 
 设置页「任务日志」里多了一个页签，汇总 [dsh-deepseek-web-login](https://github.com/cv-superding/dsh-deepseek-web-login)

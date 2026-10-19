@@ -21,6 +21,7 @@ const SUITES = [
   ['verify-subagent.mjs', '子智能体目录与归档'],
   ['verify-repair.mjs', '会话修复流水线（含损坏样本）'],
   ['verify-updates.mjs', '插件更新（版本比较、兼容性拦截、升级顺序）'],
+  ['verify-plugins.mjs', '插件管理（安装/删除/护栏、HTTP 接口）'],
   ['verify-logs.mjs', '后台日志（解析、诊断、修复白名单、路径穿越）'],
   ['verify-mirrors.mjs', '镜像源（清单、配置改写、备份恢复、测速）'],
   ['verify-about.mjs', '关于（仓库归一化、GitHub 降级、热重载、profile 检测）'],

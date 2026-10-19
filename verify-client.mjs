@@ -246,6 +246,43 @@ const main = async () => {
   // 更新页签面向整个 profile，不是某个会话：不该出现会话工具条上的动作。
   ok(!updButtons.some((b) => b.includes('一键重试')), '更新页签不套用会话工具条')
 
+  console.log('\n五之二、插件管理页签渲染')
+  sharedStore.set('dsh-task-journal:last-tab', 'plugins')
+  const { mod: modP, React: ReactP } = loadBundle(sharedStore)
+  let sectionP = null
+  const slotsP = {
+    register: (spec, Comp) => { sectionP = { spec, Comp } },
+    inject: (name, cb) => cb(),
+  }
+  modP.apply({ effect: (f) => f(), slots: slotsP })
+  ReactP._reset()
+  let pTree = null
+  let pErr = null
+  try { pTree = sectionP.Comp({}) } catch (e) { pErr = e }
+  ok(pErr === null, '插件管理页签渲染不抛异常' + (pErr === null ? '' : `：${pErr.message}`))
+  const pButtons = []
+  const pInputs = []
+  const seenP = new Set()
+  const renderP = (node, depth = 0) => {
+    if (node === null || node === undefined || typeof node !== 'object') return
+    if (depth > 40) return
+    if (Array.isArray(node)) { for (const c of node) renderP(c, depth); return }
+    if (typeof node.type === 'function') {
+      if (seenP.has(node.type)) return
+      seenP.add(node.type)
+      renderP(node.type(node.props), depth + 1)
+      return
+    }
+    if (node.type === 'button' && typeof node.children?.[0] === 'string') pButtons.push(node.children[0])
+    if (node.type === 'input' && typeof node.props?.placeholder === 'string') pInputs.push(node.props.placeholder)
+    for (const c of node.children ?? []) renderP(c, depth + 1)
+  }
+  renderP(pTree)
+  ok(pButtons.some((b) => b.includes('安装')), `插件管理有「安装」按钮（${pButtons.join(' / ')}）`)
+  ok(pButtons.some((b) => b.includes('刷新')), '插件管理有「刷新」按钮')
+  ok(pInputs.some((t) => t.includes('包名')), `有 spec 输入框（${pInputs.join(' / ')}）`)
+  ok(!pButtons.some((b) => b.includes('一键重试')), '插件管理页签不套用会话工具条')
+
   console.log('\n六、镜像源页签渲染')
   sharedStore.set('dsh-task-journal:last-tab', 'mirrors')
   // 注入一份假的镜像数据：这样才走得到两栏与按钮那些依赖数据的分支。
