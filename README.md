@@ -22,6 +22,20 @@ Doubao×2、Grok、Claude、Gemini、Z.ai×3）。
 
 读的是 `/__webcode/{status,models,settings,attach-status}`。
 
+### 按探测显示
+
+这两个跨插件页签**按探测结果显示**：
+
+```
+const [probe, setProbe] = useState({ weblogin: false, webcode: false })
+// 探测 /deepseek-web-login/api/status 与 /__webcode/status
+```
+
+插件停用后，页签**跟着消失**，不留一个永远读不到数据的死页签。
+正停在被停用的页签上时会自动回退到「任务清单」。
+
+（这段原本叫「它自己的入口删不掉」，说清了为什么设置页里那个入口挪不走。）
+
 ### 它自己的入口删不掉
 
 它注册了 `settings.section`（id `webcode`，label「网页桥接」），还有
