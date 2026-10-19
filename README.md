@@ -586,6 +586,40 @@ session_repair(action: scan | fix | fix_all | verify, session?, file?, apply?)
 dsh-journal repair [--session <id>] [--apply]
 ```
 
+## 插件管理
+
+「插件更新」只管**升级已装插件**。增删是另一回事——这个页签补上：
+
+设置页「任务日志」→「**插件管理**」页签可以：
+
+- **安装**：给包名、绝对路径、`github:owner/repo` 或 tarball，装进当前 profile
+- **删除**：卸载已安装的插件
+- **升级**：复用「插件更新」那套逻辑（先移除、再安装，版本由版本来源决定）
+- 看清每一行为什么**不能**动：随安装提供的、有加载错误的、以及本插件自己
+
+### 五条护栏
+
+这个页签能改 profile、能装任意代码，所以纪律比只读页签严得多：
+
+1. **写操作必须 `confirm: true`。** 界面上点过确认不算，请求体里带了才算。
+2. **不许删自己。** 删掉本插件，这个面板当场消失，用户失去操作入口。
+3. **不许删宿主随安装提供的东西**（`removable: false`），并直接说明原因。
+4. **不许把 spec 当命令行参数。** 以 `-` 开头的直接拒绝——那会被 pnpm 当成选项。
+5. **没有 `pluginManager` 服务就回 503**，不假装成功、不猜版本。
+
+另外：已安装的包不再走安装路径（避免装出第二份），换版本请用「插件更新」。
+
+### 接口
+
+| 方法 | 路径 | 作用 |
+|---|---|---|
+| GET | `/api/dsh-journal/plugins` | 列表 + 每行的可操作性 + 计数 |
+| GET | `/api/dsh-journal/plugins/capability` | 宿主有没有装 `pluginManager` |
+| POST | `/api/dsh-journal/plugins/install` | `{spec, confirm:true, enabled?}` |
+| POST | `/api/dsh-journal/plugins/remove` | `{name, confirm:true}` |
+
+装包等于允许那个包的代码在本机运行。服务只监听 `127.0.0.1`，但也只该把这里当成本机操作入口。
+
 ## 插件更新
 
 DSH 的插件市场只**报告** `update-available`，自己不升级：官方插件的「更新」由 Discover 页走「先移除、再安装」，第三方插件没有这条路。这个页签把那条路做掉。
@@ -890,6 +924,7 @@ node verify-api.mjs        # 界面 API
 node verify-subagent.mjs   # 子智能体目录 / 归档 / 记录 / 接口
 node verify-repair.mjs     # 会话修复流水线（自造损坏样本）
 node verify-updates.mjs    # 插件更新（版本比较、兼容性拦截、升级顺序）
+node verify-plugins.mjs    # 插件管理（安装/删除/护栏、HTTP 接口）
 node verify-logs.mjs       # 后台日志（解析、诊断、修复白名单、路径穿越）
 node verify-mirrors.mjs    # 镜像源（清单、配置改写、备份恢复、测速）
 node verify-about.mjs      # 关于（仓库归一化、GitHub 降级、热重载、profile 检测）
