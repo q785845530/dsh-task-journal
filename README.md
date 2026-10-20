@@ -1,5 +1,46 @@
 # dsh-task-journal
 
+## ⚠️ 启动开关与一次真实事故（2026-10-20）
+
+**默认关闭。** 在 `~/.dsh/profiles/web/cordis.patch.yml` 里：
+
+```yaml
+- id: dsh-task-journal
+  config:
+    enabled: false   # 改成 true 才启用
+```
+
+`enabled: false` 时插件**完全不加载**：不注册工具、不开 `/api/dsh-journal/*`、
+不建日志目录，等价于没装。改完重启 DSH 生效。
+
+用 `node verify-startup.mjs` 体检：会话日志首帧是否合规、开关是否在、默认是否关闭。
+
+### 事故经过
+
+装上本插件后 DSH 起不来，报：
+
+```
+corrupt Zstandard session log: first frame is not exactly one header line
+```
+
+**根因不在加载，在旧版的 `session-repair.js`。** 宿主（`dsh-session-persistence-jsonl`）
+要求 zstd 会话日志的**第一帧恰好只有一行 header**，这是 fail-closed 的硬校验
+（`assertZstdHeaderFrame`）。旧版 `repairBuffer` 在重写修复过的事件帧时，如果修复
+发生在第 0 帧，会把事件和头一起压回首帧 —— 文件从此再也读不了，DSH 启动即崩。
+
+### 已修
+
+| 位置 | 改动 |
+|------|------|
+| `decodeSession` | 认出「首帧混入 N 行事件」，记进 `failReason`，把这些行按 frame 0 事件解析 |
+| `repairBuffer` | 头帧脏时重建成**只有一行头**的帧，事件拆到独立帧；干净时原字节复用 |
+| 帧数自检 | 允许头帧拆分导致的 +1，并复检 `failReason` |
+| `output` 返回 | 只改头帧（没有事件需要修）时也要返回字节，否则修了等于没修 |
+
+验证：拿真实坏文件跑 `repairBuffer`，输出首帧 200 字节、换行在 199 位，宿主解析通过。
+
+
+
 把**任务**、**工作结果**、**模型参数**、**未完成的问题**、**子智能体的使用情况**自动写到本地文件的 DSH 插件。附带命令行 `dsh-journal` 用于导出、查看与归档。
 
 它在会话事件流上工作：你下发的任务、助手的产出、工具的调用结果、每一轮用的模型与参数，都会被增量追加到当前会话工作目录下的 `.dsh-journal/`。轮次失败时会单独记下**未完成的任务与原因**，并可一键重试。委派给子智能体的每一次调用也会被记下来，并可按软件开发分类**浏览、归档、复用**。

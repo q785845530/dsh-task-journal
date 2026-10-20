@@ -57,5 +57,8 @@
   },
   "mirrors": {
     "gitee": "https://gitee.com/wasen/dsh-task-journal"
+  },
+  "scripts": {
+    "verify:startup": "node verify-startup.mjs"
   }
 }
