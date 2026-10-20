@@ -75,7 +75,27 @@ if (existsSync(PROFILE_PATCH)) {
 ok('profile 里有 task-journal 开关', switchState !== 'missing', `当前 ${switchState === 'on' ? '已开启' : switchState === 'off' ? '已关闭' : '未找到'}`);
 ok('开关默认关闭', switchState === 'off', switchState === 'on' ? '当前是开启状态（可接受，但默认应为 off）' : '');
 
-// 3) 不做真实启动（要占端口、耗时），只检查入口可被 import
+// 3) 依赖必须复用宿主那份，不能自带旧副本
+//    事故根因：dependencies 里钉 @deepseek-ai/dsh-tools@0.1.1-rc.2，
+//    旧副本 import { CallId } from 'dsh-llm'，而 0.2.x 已把 CallId 改名 ToolCallId，
+//    于是插件在 import 阶段就炸，连带 dsh-writing-slots 一起起不来。
+const manifest = JSON.parse(readFileSync(join(import.meta.dirname, 'package.json'), 'utf8'));
+const deps = Object.keys(manifest.dependencies ?? {});
+const hostPinned = deps.filter((d) => d.startsWith('@deepseek-ai/'));
+ok('没有把宿主包钉进 dependencies', hostPinned.length === 0,
+  hostPinned.length === 0 ? '' : `钉死了 ${hostPinned.join('、')}，会拉出与宿主不兼容的旧副本`);
+
+const peers = manifest.peerDependencies ?? {};
+ok('宿主包声明为 peerDependencies',
+  peers['@deepseek-ai/dsh-tools'] !== undefined && peers['@deepseek-ai/cordis'] !== undefined,
+  `dsh-tools=${peers['@deepseek-ai/dsh-tools'] ?? '缺失'}`);
+
+// 插件自身目录里不该有 node_modules/@deepseek-ai 的实体副本
+const vendored = join(import.meta.dirname, 'node_modules', '@deepseek-ai');
+ok('插件目录没有自带宿主包副本', !existsSync(vendored) || readdirSync(vendored).length === 0,
+  existsSync(vendored) ? `发现 ${readdirSync(vendored).join('、')}` : '');
+
+// 4) 不做真实启动（要占端口、耗时），只检查入口可被 import
 ok('插件入口可解析', existsSync(join(import.meta.dirname, 'lib', 'index.js')));
 ok('session-repair 首帧拆分逻辑存在',
   readFileSync(join(import.meta.dirname, 'lib', 'session-repair.js'), 'utf8').includes('头部帧里混入了'));

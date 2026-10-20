@@ -15,6 +15,46 @@
 
 用 `node verify-startup.mjs` 体检：会话日志首帧是否合规、开关是否在、默认是否关闭。
 
+### 事故二：依赖钉死旧版，import 阶段就炸（2026-10-20 16:20）
+
+启动日志 `startup-2026-10-20T08-20-56.194Z` 报的是另一回事：
+
+```
+Failed plugins (2):
+  dsh-writing-slots
+  dsh-task-journal
+    failed to import: .../node_modules/@deepseek-ai/dsh-tools/lib/index.js:4
+    import { CallId, HarnessError, ... } from "@deepseek-ai/dsh-llm";
+    SyntaxError: The requested module '@deepseek-ai/dsh-llm' does not provide an export named 'CallId'
+```
+
+**根因是版本断层，与插件逻辑无关。** `package.json` 原先写着：
+
+```json
+"dependencies": { "@deepseek-ai/dsh-tools": "0.1.1-rc.2" }
+```
+
+这份 0.1.1-rc.2 的 `dsh-tools` 在第 4 行 `import { CallId } from '@deepseek-ai/dsh-llm'`。
+而 DSH 0.2.x 已把 `CallId` 改名为 **`ToolCallId`**（`packages/llm/llm/src/brand.ts`）。
+于是这份旧副本一被加载就 SyntaxError，插件连 `apply()` 都进不去。
+
+为什么 `dsh-writing-slots` 也被带崩：它同样 `import { defineTool } from '@deepseek-ai/dsh-tools'`，
+而 profile 的 `node_modules` 里曾经存在旧副本的解析路径，一个包炸掉，两个插件一起失败。
+
+**修法：宿主随附的包一律走 peer，不自带副本。**
+
+```json
+"dependencies": {},
+"peerDependencies": {
+  "@deepseek-ai/cordis": "^4.0.1",
+  "@deepseek-ai/dsh-tools": "*"
+},
+"engines": { "node": ">=22.5", "dsh": ">=0.2.0-rc.1" }
+```
+
+这样 `dsh-tools` 由宿主提供，永远和宿主同一个版本，`CallId` / `ToolCallId` 的改名再也影响不到插件。
+`verify-startup.mjs` 加了三项检查，防止以后又钉死回去。
+
 ### 事故经过
 
 装上本插件后 DSH 起不来，报：
